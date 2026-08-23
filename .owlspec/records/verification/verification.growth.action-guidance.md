@@ -8,4 +8,4 @@ target = "test/run.sh"
 
 # Verify next-action guidance
 
-Run `./test/run.sh`. The scenario requests `recommend_action` for the next dependency task and checks that active scoped guidance is returned while an explicit project mismatch is excluded.
+Run `./test/run.sh`. The scenario requests `recommend_action` for the next dependency task and checks that active scoped guidance is returned while explicit project mismatches and unqualified project-scoped guidance are excluded. It also verifies bounded guidance is returned in stable order.

@@ -21,6 +21,8 @@ The server appends JSON Lines records to:
 
 An adaptation is not an experience. `observe_adaptation` only counts a result when an evidence value is supplied, and `review_adaptation` recommends `strengthen`, `refine-or-narrow`, or `gather-more` from observed counts. `revise_adaptation` changes guidance/scope without losing evidence, while `retire_adaptation` preserves history while removing guidance from recommendations.
 
+The server rejects empty task/action/guidance/evidence values and rejects adaptation references to unknown experiences. New Adaptations always start with zero external evidence; only `observe_adaptation` can add an observed result. Observations must identify a project and task when the adaptation scope requires them; out-of-scope observations are not counted. Bounded lists are returned in stable adaptation/experience-id order so repeated context reads do not reshuffle the agent's input.
+
 ## MCP surface
 
 Use `discover` first when routing is unclear. The tools are deliberately narrow: find/record experiences, record/observe/review/revise/retire adaptations, and recommend the next action. The `owlgrowth://guidance` resource is bounded to avoid context growth; use `recommend_action` with task/project/scope for targeted guidance. There is no product CLI or OwlKnowledge/Owlspec integration.
