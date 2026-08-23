@@ -10,6 +10,10 @@ to = "constraint.evaluation.external-outcome"
 [[relations]]
 type = "constrained_by"
 to = "constraint.experience.observed-fact"
+
+[[relations]]
+type = "verified_by"
+to = "verification.growth.adaptation-loop"
 +++
 
 # Adaptationが経験によって継続改善される

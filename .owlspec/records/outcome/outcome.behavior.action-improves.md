@@ -6,6 +6,10 @@ kind = "outcome"
 [[relations]]
 type = "constrained_by"
 to = "constraint.evaluation.external-outcome"
+
+[[relations]]
+type = "verified_by"
+to = "verification.growth.action-guidance"
 +++
 
 # Experienceによって次のActionが改善される

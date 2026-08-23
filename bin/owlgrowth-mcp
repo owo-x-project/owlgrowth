@@ -1,0 +1,11 @@
+#!/bin/sh
+set -eu
+
+script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+data_dir=${OWL_GROWTH_DATA_DIR:-"$PWD/.owlgrowth"}
+case "$data_dir" in
+  /*) ;;
+  *) data_dir="$PWD/$data_dir" ;;
+esac
+mkdir -p "$data_dir"
+exec awk -v data_dir="$data_dir" -f "$script_dir/owlgrowth-mcp.awk"

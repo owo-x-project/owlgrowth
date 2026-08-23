@@ -6,6 +6,10 @@ kind = "outcome"
 [[relations]]
 type = "constrained_by"
 to = "constraint.experience.project-scoped"
+
+[[relations]]
+type = "verified_by"
+to = "verification.growth.cross-project-scope"
 +++
 
 # 有効なAdaptationがプロジェクトを越えて一般化される

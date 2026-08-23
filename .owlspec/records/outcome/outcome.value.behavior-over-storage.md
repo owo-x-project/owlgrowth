@@ -6,6 +6,10 @@ kind = "outcome"
 [[relations]]
 type = "constrained_by"
 to = "constraint.evaluation.external-outcome"
+
+[[relations]]
+type = "verified_by"
+to = "verification.growth.behavior-over-storage"
 +++
 
 # 保存量ではなく行動品質が改善される
