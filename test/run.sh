@@ -12,6 +12,12 @@ call() {
 out=$(call '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}')
 printf '%s\n' "$out" | grep '"protocolVersion":"2024-11-05"' >/dev/null
 
+out=$(call '{"jsonrpc":"1.0","id":1,"method":"ping"}')
+printf '%s\n' "$out" | grep 'requires jsonrpc 2.0' >/dev/null
+
+out=$(call '{"jsonrpc":"2.0","id":{"bad":1},"method":"ping"}')
+printf '%s\n' "$out" | grep 'request id must be a string' >/dev/null
+
 out=$(call '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"discover","arguments":{}}}')
 printf '%s\n' "$out" | grep 'record_experience' >/dev/null
 
@@ -78,6 +84,13 @@ printf '%s\n' "$out" | grep 'does not accept evidence' >/dev/null
 out=$(call '{"jsonrpc":"2.0","id":22,"method":"tools/call","params":{"name":"record_adaptation","arguments":{"adaptation_id":"adapt-unproven","guidance":"unproven guidance","scope":{"task":"dependency debugging"}}}}')
 printf '%s\n' "$out" | grep 'at least one source experience' >/dev/null
 
+out=$(call '{"jsonrpc":"2.0","id":23,"method":"tools/call","params":{"name":"record_adaptation","arguments":{"adaptation_id":"adapt-bad-scope","guidance":"bad scope must not be stored","scope":{"project":123},"source_experience_ids":["exp-a"]}}}')
+printf '%s\n' "$out" | grep "scope field 'project' must be a non-empty string" >/dev/null
+if grep 'adapt-bad-scope' "$tmp/data/adaptations.jsonl" >/dev/null; then exit 1; fi
+
+out=$(call '{"jsonrpc":"2.0","id":24,"method":"tools/call","params":{"name":"recommend_action","arguments":{"scope":[]}}}')
+printf '%s\n' "$out" | grep 'requires a valid object argument' >/dev/null
+
 call '{"jsonrpc":"2.0","id":80,"method":"tools/call","params":{"name":"record_adaptation","arguments":{"adaptation_id":"adapt-detail","guidance":"detail guidance","scope":{"task":"detail"},"source_experience_ids":["exp-a"]}}}' >/dev/null
 n=1
 while [ "$n" -le 6 ]; do
@@ -113,7 +126,7 @@ out=$(call '{"jsonrpc":"2.0","id":47,"method":"tools/call","params":{"name":"rec
 printf '%s\n' "$out" | grep 'non-empty argument' >/dev/null
 
 out=$(call '{"jsonrpc":"2.0","id":471,"method":"tools/call","params":{"name":"record_experience","arguments":{"experience_id":"bad-json","task":"bad json","action":"bad json","outcome":{"broken":},"evidence":"observed"}}}')
-printf '%s\n' "$out" | grep 'valid JSON argument' >/dev/null
+printf '%s\n' "$out" | grep 'parse error' >/dev/null
 
 long_text=$(awk 'BEGIN { for (i = 1; i <= 6000; i++) printf "x" }')
 out=$(call "{\"jsonrpc\":\"2.0\",\"id\":472,\"method\":\"tools/call\",\"params\":{\"name\":\"record_experience\",\"arguments\":{\"experience_id\":\"bounded-text\",\"task\":\"bounded text\",\"action\":\"$long_text\",\"outcome\":{\"result\":\"$long_text\"},\"evidence\":\"$long_text\"}}}")
@@ -124,7 +137,7 @@ grep 'bounded-text' "$tmp/data/experiences.jsonl" >/dev/null
 
 n=1
 while [ "$n" -le 21 ]; do
-    call "{\"jsonrpc\":\"2.0\",\"id\":$((n + 48)),\"method\":\"tools/call\",\"params\":{\"name\":\"record_experience\",\"arguments\":{\"experience_id\":\"bounded-exp-$n\",\"project\":\"project-a\",\"task\":\"bounded experience\",\"action\":\"run $n\",\"outcome\":{\"result\":\"success\"},\"evidence\":\"exit $n\"}}}}" >/dev/null
+    call "{\"jsonrpc\":\"2.0\",\"id\":$((n + 48)),\"method\":\"tools/call\",\"params\":{\"name\":\"record_experience\",\"arguments\":{\"experience_id\":\"bounded-exp-$n\",\"project\":\"project-a\",\"task\":\"bounded experience\",\"action\":\"run $n\",\"outcome\":{\"result\":\"success\"},\"evidence\":\"exit $n\"}}}" >/dev/null
     n=$((n + 1))
 done
 out=$(call '{"jsonrpc":"2.0","id":70,"method":"tools/call","params":{"name":"find_experiences","arguments":{"query":"bounded experience","limit":999999}}}')

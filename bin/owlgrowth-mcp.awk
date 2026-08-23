@@ -214,6 +214,13 @@ function valid_json(s) {
     return JSON_OK && JSON_POS > length(s)
 }
 
+function valid_rpc_id(raw) {
+    if (raw == "null") return 1
+    if (substr(raw, 1, 1) == "\"") return valid_json(raw)
+    if (raw !~ /^-?(0|[1-9][0-9]*)(\.[0-9]+)?([eE][+-]?[0-9]+)?$/) return 0
+    return valid_json(raw)
+}
+
 function raw_kind(raw, i, c) {
     i = ws(raw, 1); c = substr(raw, i, 1)
     if (c == "{") return "object"
@@ -434,6 +441,17 @@ function required_object(obj, name, label) {
     return GET_RAW
 }
 
+function valid_scope(raw, label) {
+    if (substr(raw, 1, 1) != "{" || !valid_json(raw)) return fail(label " requires a valid object argument 'scope'")
+    object_get(raw, "project")
+    if (GET_PRESENT && (substr(GET_RAW, 1, 1) != "\"" || GET_STRING ~ /^[[:space:]]*$/)) return fail(label " scope field 'project' must be a non-empty string")
+    object_get(raw, "task")
+    if (GET_PRESENT && (substr(GET_RAW, 1, 1) != "\"" || GET_STRING ~ /^[[:space:]]*$/)) return fail(label " scope field 'task' must be a non-empty string")
+    object_get(raw, "ecosystem")
+    if (GET_PRESENT && (substr(GET_RAW, 1, 1) != "\"" || GET_STRING ~ /^[[:space:]]*$/)) return fail(label " scope field 'ecosystem' must be a non-empty string")
+    return 1
+}
+
 function validate_experience_ids(raw, label, i, start, e, item) {
     if (substr(raw, 1, 1) != "[" || !valid_json(raw)) return fail(label " must be a valid JSON array")
     i = ws(raw, 2)
@@ -452,8 +470,14 @@ function validate_experience_ids(raw, label, i, start, e, item) {
 }
 
 function handle_request(line, method, id_present, params) {
+    if (!valid_json(line)) { ID_RAW = "null"; rpc_error(-32700, "parse error"); return }
+    object_get(line, "jsonrpc")
+    if (!GET_PRESENT || GET_RAW != "\"2.0\"") { ID_RAW = "null"; rpc_error(-32600, "request requires jsonrpc 2.0"); return }
     ID_RAW = "null"; object_get(line, "id"); id_present = GET_PRESENT
-    if (id_present) ID_RAW = GET_RAW
+    if (id_present) {
+        ID_RAW = GET_RAW
+        if (!valid_rpc_id(ID_RAW)) { ID_RAW = "null"; rpc_error(-32600, "request id must be a string, number, or null"); return }
+    }
     object_get(line, "method")
     if (!GET_PRESENT || substr(GET_RAW, 1, 1) != "\"") { if (id_present) rpc_error(-32600, "request requires string method"); return }
     method = GET_STRING
@@ -579,6 +603,7 @@ function record_experience(args, task, action, outcome, evidence, project, occur
 function record_adaptation(args, guidance, scope, sources, evidence, id, record) {
     if (!required_nonempty_string(args, "guidance", "record_adaptation")) return; guidance = GET_STRING
     scope = required_object(args, "scope", "record_adaptation"); if (!scope) return
+    if (!valid_scope(scope, "record_adaptation")) return
     object_get(args, "source_experience_ids"); sources = (GET_PRESENT ? GET_RAW : "[]")
     if (substr(sources, 1, 1) != "[") { fail("record_adaptation source_experience_ids must be an array"); return }
     if (sources == "[]") { fail("record_adaptation requires at least one source experience"); return }
@@ -599,6 +624,7 @@ function revise_adaptation(args, id, guidance, scope, sources, reason, record) {
     if (adapt_status[id] == "retired") { fail("cannot revise retired adaptation: " id); return }
     if (!required_nonempty_string(args, "guidance", "revise_adaptation")) return; guidance = GET_STRING
     scope = required_object(args, "scope", "revise_adaptation"); if (!scope) return
+    if (!valid_scope(scope, "revise_adaptation")) return
     if (!required_nonempty_string(args, "reason", "revise_adaptation")) return; reason = GET_STRING
     object_get(args, "source_experience_ids"); sources = (GET_PRESENT ? GET_RAW : adapt_sources[id])
     if (substr(sources, 1, 1) != "[") { fail("revise_adaptation source_experience_ids must be an array"); return }
@@ -682,6 +708,7 @@ function find_experiences(args, query, project, limit, id, count, list, truncate
 
 function recommend_action(args, task, project, scope_raw, id, count, list, limit, truncated) {
     task = optional_string(args, "task", ""); project = optional_string(args, "project", ""); object_get(args, "scope"); scope_raw = (GET_PRESENT ? GET_RAW : "")
+    if (scope_raw != "" && !valid_scope(scope_raw, "recommend_action")) return
     limit = bounded_limit(args, "limit", MAX_CONTEXT_ITEMS)
     split("project ecosystem task", scope_fields, " ")
     for (id in recommendation_used) delete recommendation_used[id]
