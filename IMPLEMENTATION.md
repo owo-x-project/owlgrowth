@@ -8,7 +8,7 @@ OwlGrowth is a small MCP server for turning observed work outcomes into scoped, 
 OWL_GROWTH_DATA_DIR=.owlgrowth ./bin/owlgrowth-mcp
 ```
 
-The process speaks newline-delimited JSON-RPC over stdin/stdout. Its only product interface is MCP. The launcher is POSIX `sh`; the server is POSIX `awk` and has no Python, jq, SQLite, HTTP server, or MCP SDK dependency.
+The process speaks newline-delimited JSON-RPC over stdin/stdout. Notifications without an id are executed without emitting a response. Its only product interface is MCP. The launcher is POSIX `sh`; the server is POSIX `awk` and has no Python, jq, SQLite, HTTP server, or MCP SDK dependency.
 
 The default data directory is `.owlgrowth` below the caller's working directory. Set `OWL_GROWTH_DATA_DIR` when several projects intentionally share the same adaptation store. Experiences retain their `project` field; adaptations retain an explicit `scope` and therefore are not silently generalized.
 

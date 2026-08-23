@@ -8,6 +8,7 @@ BEGIN {
     MAX_CONTEXT_ITEMS = 20
     MAX_CONTEXT_TEXT = 512
     MAX_IDENTIFIER_TEXT = 256
+    REQUEST_NOTIFICATION = 0
     load_experiences()
     load_adaptations()
 }
@@ -470,6 +471,7 @@ function validate_experience_ids(raw, label, i, start, e, item) {
 }
 
 function handle_request(line, method, id_present, params) {
+    REQUEST_NOTIFICATION = 0
     if (!valid_json(line)) { ID_RAW = "null"; rpc_error(-32700, "parse error"); return }
     object_get(line, "jsonrpc")
     if (!GET_PRESENT || GET_RAW != "\"2.0\"") { ID_RAW = "null"; rpc_error(-32600, "request requires jsonrpc 2.0"); return }
@@ -478,6 +480,7 @@ function handle_request(line, method, id_present, params) {
         ID_RAW = GET_RAW
         if (!valid_rpc_id(ID_RAW)) { ID_RAW = "null"; rpc_error(-32600, "request id must be a string, number, or null"); return }
     }
+    REQUEST_NOTIFICATION = !id_present
     object_get(line, "method")
     if (!GET_PRESENT || substr(GET_RAW, 1, 1) != "\"") { if (id_present) rpc_error(-32600, "request requires string method"); return }
     method = GET_STRING
@@ -492,9 +495,10 @@ function handle_request(line, method, id_present, params) {
     if (id_present) rpc_error(-32601, "method not found: " method)
 }
 
-function rpc_result(result) { print "{\"jsonrpc\":\"2.0\",\"id\":" ID_RAW ",\"result\":" result "}"; fflush() }
-function rpc_error(code, message) { print "{\"jsonrpc\":\"2.0\",\"id\":" ID_RAW ",\"error\":{\"code\":" code ",\"message\":" json_escape(message) "}}"; fflush() }
+function rpc_result(result) { if (REQUEST_NOTIFICATION) return; print "{\"jsonrpc\":\"2.0\",\"id\":" ID_RAW ",\"result\":" result "}"; fflush() }
+function rpc_error(code, message) { if (REQUEST_NOTIFICATION) return; print "{\"jsonrpc\":\"2.0\",\"id\":" ID_RAW ",\"error\":{\"code\":" code ",\"message\":" json_escape(message) "}}"; fflush() }
 function tool_text(message, is_error) {
+    if (REQUEST_NOTIFICATION) return
     print "{\"jsonrpc\":\"2.0\",\"id\":" ID_RAW ",\"result\":{\"content\":[{\"type\":\"text\",\"text\":" json_escape(message) "}]" (is_error ? ",\"isError\":true" : "") "}}"
     fflush()
 }

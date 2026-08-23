@@ -12,6 +12,9 @@ call() {
 out=$(call '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}')
 printf '%s\n' "$out" | grep '"protocolVersion":"2024-11-05"' >/dev/null
 
+out=$(call '{"jsonrpc":"2.0","method":"ping"}')
+[ -z "$out" ]
+
 out=$(call '{"jsonrpc":"1.0","id":1,"method":"ping"}')
 printf '%s\n' "$out" | grep 'requires jsonrpc 2.0' >/dev/null
 
