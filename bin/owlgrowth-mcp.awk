@@ -236,6 +236,26 @@ function evidence_summary(raw, success, failure, other, observations) {
     return "{\"success\":" success ",\"failure\":" failure ",\"other\":" other ",\"observation_count\":" observations "}"
 }
 
+function recent_observations(raw, limit, i, start, e, count, item, first, list) {
+    object_get(raw, "observations")
+    if (!GET_PRESENT || substr(GET_RAW, 1, 1) != "[") return "{\"items\":[],\"truncated\":false}"
+    raw = GET_RAW; limit = 5; count = 0
+    for (item in recent_items) delete recent_items[item]
+    i = ws(raw, 2)
+    while (i <= length(raw) && substr(raw, i, 1) != "]") {
+        start = ws(raw, i); e = value_end(raw, start)
+        if (e < start) break
+        recent_items[++count] = substr(raw, start, e - start + 1)
+        i = ws(raw, e + 1)
+        if (substr(raw, i, 1) == ",") i = ws(raw, i + 1)
+        else break
+    }
+    first = count - limit + 1; if (first < 1) first = 1
+    list = "["
+    for (i = first; i <= count; i++) { if (i > first) list = list ","; list = list recent_items[i] }
+    return "{\"items\":" list "],\"truncated\":" (count > limit ? "true" : "false") "}"
+}
+
 function adaptation_summary(id) {
     return "{\"id\":" json_escape(id) ",\"kind\":\"adaptation\",\"guidance\":" json_escape(adapt_guidance[id]) ",\"scope\":" adapt_scope[id] ",\"source_experience_count\":" array_item_count(adapt_sources[id]) ",\"evidence\":" evidence_summary(adapt_evidence[id]) ",\"status\":" json_escape(adapt_status[id]) "}"
 }
@@ -301,7 +321,7 @@ function tools_json() {
       "{\"name\":\"revise_adaptation\",\"description\":\"Revise guidance or narrow its scope while preserving its observed evidence and history.\",\"inputSchema\":{\"type\":\"object\",\"required\":[\"adaptation_id\",\"guidance\",\"scope\",\"reason\"],\"properties\":{\"adaptation_id\":{\"type\":\"string\"},\"guidance\":{\"type\":\"string\"},\"scope\":{},\"reason\":{\"type\":\"string\"},\"source_experience_ids\":{\"type\":\"array\"}}}}," \
       "{\"name\":\"observe_adaptation\",\"description\":\"Evaluate guidance with an externally observable outcome and append the observation.\",\"inputSchema\":{\"type\":\"object\",\"required\":[\"adaptation_id\",\"result\",\"evidence\"],\"properties\":{\"adaptation_id\":{\"type\":\"string\"},\"result\":{\"type\":\"string\"},\"evidence\":{},\"project\":{\"type\":\"string\"},\"task\":{\"type\":\"string\"},\"observed_at\":{\"type\":\"string\"}}}}," \
       "{\"name\":\"recommend_action\",\"description\":\"Return up to a bounded number of active scoped adaptations that may improve the next action. Results are hard-capped at 20 and include evidence counts, not full history.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"task\":{\"type\":\"string\"},\"scope\":{},\"project\":{\"type\":\"string\"},\"limit\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":20}}}}," \
-      "{\"name\":\"review_adaptation\",\"description\":\"Summarize external evidence and recommend strengthen, refine/narrow, or gather-more.\",\"inputSchema\":{\"type\":\"object\",\"required\":[\"adaptation_id\"],\"properties\":{\"adaptation_id\":{\"type\":\"string\"}}}}," \
+      "{\"name\":\"review_adaptation\",\"description\":\"Summarize external evidence, show up to five recent observations, and recommend strengthen, refine/narrow, or gather-more.\",\"inputSchema\":{\"type\":\"object\",\"required\":[\"adaptation_id\"],\"properties\":{\"adaptation_id\":{\"type\":\"string\"}}}}," \
       "{\"name\":\"retire_adaptation\",\"description\":\"Stop recommending an adaptation while preserving its history.\",\"inputSchema\":{\"type\":\"object\",\"required\":[\"adaptation_id\"],\"properties\":{\"adaptation_id\":{\"type\":\"string\"}}}}]}"
 }
 
@@ -512,7 +532,7 @@ function review_adaptation(args, id, e, success, failure, other, recommendation)
     else if (failure > success) recommendation = "refine-or-narrow"
     else if (success > failure) recommendation = "strengthen"
     else recommendation = "gather-more"
-    tool_text("{\"adaptation\":" adaptation_summary(id) ",\"recommendation\":" json_escape(recommendation) ",\"reason\":\"Based on externally observed success/failure counts; self-assessment is not counted.\"}")
+    tool_text("{\"adaptation\":" adaptation_summary(id) ",\"recent_observations\":" recent_observations(adapt_evidence[id]) ",\"recommendation\":" json_escape(recommendation) ",\"reason\":\"Based on externally observed success/failure counts; self-assessment is not counted.\"}")
 }
 
 function retire_adaptation(args, id, record) {

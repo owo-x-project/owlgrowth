@@ -75,6 +75,16 @@ printf '%s\n' "$out" | grep 'does not accept evidence' >/dev/null
 out=$(call '{"jsonrpc":"2.0","id":22,"method":"tools/call","params":{"name":"record_adaptation","arguments":{"adaptation_id":"adapt-unproven","guidance":"unproven guidance","scope":{"task":"dependency debugging"}}}}')
 printf '%s\n' "$out" | grep 'at least one source experience' >/dev/null
 
+call '{"jsonrpc":"2.0","id":80,"method":"tools/call","params":{"name":"record_adaptation","arguments":{"adaptation_id":"adapt-detail","guidance":"detail guidance","scope":{"task":"detail"},"source_experience_ids":["exp-a"]}}}' >/dev/null
+n=1
+while [ "$n" -le 6 ]; do
+    call "{\"jsonrpc\":\"2.0\",\"id\":$((n + 80)),\"method\":\"tools/call\",\"params\":{\"name\":\"observe_adaptation\",\"arguments\":{\"adaptation_id\":\"adapt-detail\",\"project\":\"project-a\",\"task\":\"detail\",\"result\":\"success\",\"evidence\":\"detail $n\"}}}" >/dev/null
+    n=$((n + 1))
+done
+out=$(call '{"jsonrpc":"2.0","id":90,"method":"tools/call","params":{"name":"review_adaptation","arguments":{"adaptation_id":"adapt-detail"}}}')
+printf '%s\n' "$out" | grep 'recent_observations' >/dev/null
+printf '%s\n' "$out" | grep 'truncated.*true' >/dev/null
+
 n=1
 while [ "$n" -le 21 ]; do
     call "{\"jsonrpc\":\"2.0\",\"id\":$((n + 22)),\"method\":\"tools/call\",\"params\":{\"name\":\"record_adaptation\",\"arguments\":{\"adaptation_id\":\"bounded-$n\",\"guidance\":\"bounded guidance $n\",\"scope\":{\"task\":\"bounded\"},\"source_experience_ids\":[\"exp-a\"]}}}" >/dev/null
