@@ -54,7 +54,7 @@ printf '%s\n' "$out" | grep 'retired' >/dev/null
 out=$(call '{"jsonrpc":"2.0","id":15,"method":"resources/read","params":{"uri":"owlgrowth://guidance"}}')
 printf '%s\n' "$out" | grep 'check the lockfile' >/dev/null
 
-out=$(call '{"jsonrpc":"2.0","id":16,"method":"tools/call","params":{"name":"record_adaptation","arguments":{"adaptation_id":"adapt-alpha-only","guidance":"use the alpha-only migration script","scope":{"project":"project-a","task":"private migration"}}}}')
+out=$(call '{"jsonrpc":"2.0","id":16,"method":"tools/call","params":{"name":"record_adaptation","arguments":{"adaptation_id":"adapt-alpha-only","guidance":"use the alpha-only migration script","scope":{"project":"project-a","task":"private migration"},"source_experience_ids":["exp-a"]}}}')
 printf '%s\n' "$out" | grep 'adapt-alpha-only' >/dev/null
 
 out=$(call '{"jsonrpc":"2.0","id":17,"method":"tools/call","params":{"name":"recommend_action","arguments":{"task":"private migration","project":"project-b"}}}')
@@ -69,30 +69,34 @@ printf '%s\n' "$out" | grep 'outside adaptation scope' >/dev/null
 out=$(call '{"jsonrpc":"2.0","id":20,"method":"tools/call","params":{"name":"record_adaptation","arguments":{"adaptation_id":"adapt-orphan","guidance":"orphan guidance","scope":{"task":"dependency debugging"},"source_experience_ids":["missing-experience"]}}}')
 printf '%s\n' "$out" | grep 'unknown experience' >/dev/null
 
-out=$(call '{"jsonrpc":"2.0","id":21,"method":"tools/call","params":{"name":"record_adaptation","arguments":{"adaptation_id":"adapt-self-rated","guidance":"self-rated guidance","scope":{"task":"dependency debugging"},"evidence":{"success":99}}}}')
+out=$(call '{"jsonrpc":"2.0","id":21,"method":"tools/call","params":{"name":"record_adaptation","arguments":{"adaptation_id":"adapt-self-rated","guidance":"self-rated guidance","scope":{"task":"dependency debugging"},"source_experience_ids":["exp-a"],"evidence":{"success":99}}}}')
 printf '%s\n' "$out" | grep 'does not accept evidence' >/dev/null
+
+out=$(call '{"jsonrpc":"2.0","id":22,"method":"tools/call","params":{"name":"record_adaptation","arguments":{"adaptation_id":"adapt-unproven","guidance":"unproven guidance","scope":{"task":"dependency debugging"}}}}')
+printf '%s\n' "$out" | grep 'at least one source experience' >/dev/null
 
 n=1
 while [ "$n" -le 21 ]; do
-    call "{\"jsonrpc\":\"2.0\",\"id\":$((n + 21)),\"method\":\"tools/call\",\"params\":{\"name\":\"record_adaptation\",\"arguments\":{\"adaptation_id\":\"bounded-$n\",\"guidance\":\"bounded guidance $n\",\"scope\":{\"task\":\"bounded\"}}}}" >/dev/null
+    call "{\"jsonrpc\":\"2.0\",\"id\":$((n + 22)),\"method\":\"tools/call\",\"params\":{\"name\":\"record_adaptation\",\"arguments\":{\"adaptation_id\":\"bounded-$n\",\"guidance\":\"bounded guidance $n\",\"scope\":{\"task\":\"bounded\"},\"source_experience_ids\":[\"exp-a\"]}}}" >/dev/null
     n=$((n + 1))
 done
 
-out=$(call '{"jsonrpc":"2.0","id":43,"method":"tools/call","params":{"name":"recommend_action","arguments":{"task":"bounded","limit":1}}}')
+out=$(call '{"jsonrpc":"2.0","id":44,"method":"tools/call","params":{"name":"recommend_action","arguments":{"task":"bounded","limit":1}}}')
 printf '%s\n' "$out" | grep 'truncated.*true' >/dev/null
 printf '%s\n' "$out" | grep 'bounded-1' >/dev/null
 
-out=$(call '{"jsonrpc":"2.0","id":44,"method":"resources/read","params":{"uri":"owlgrowth://guidance"}}')
+out=$(call '{"jsonrpc":"2.0","id":45,"method":"resources/read","params":{"uri":"owlgrowth://guidance"}}')
 printf '%s\n' "$out" | grep 'more adaptation' >/dev/null
 
-out=$(call '{"jsonrpc":"2.0","id":45,"method":"tools/call","params":{"name":"record_experience","arguments":{"task":"missing evidence","action":"did something","outcome":"unknown"}}}')
+out=$(call '{"jsonrpc":"2.0","id":46,"method":"tools/call","params":{"name":"record_experience","arguments":{"task":"missing evidence","action":"did something","outcome":"unknown"}}}')
 printf '%s\n' "$out" | grep 'requires .*evidence' >/dev/null
 
-out=$(call '{"jsonrpc":"2.0","id":46,"method":"tools/call","params":{"name":"record_experience","arguments":{"task":"empty evidence","action":"did something","outcome":"unknown","evidence":""}}}')
+out=$(call '{"jsonrpc":"2.0","id":47,"method":"tools/call","params":{"name":"record_experience","arguments":{"task":"empty evidence","action":"did something","outcome":"unknown","evidence":""}}}')
 printf '%s\n' "$out" | grep 'non-empty argument' >/dev/null
 
 if grep 'adapt-orphan' "$tmp/data/adaptations.jsonl" >/dev/null; then exit 1; fi
 if grep 'adapt-self-rated' "$tmp/data/adaptations.jsonl" >/dev/null; then exit 1; fi
+if grep 'adapt-unproven' "$tmp/data/adaptations.jsonl" >/dev/null; then exit 1; fi
 if grep 'empty evidence' "$tmp/data/experiences.jsonl" >/dev/null; then exit 1; fi
 
 printf '%s\n' 'OwlGrowth tests passed.'
