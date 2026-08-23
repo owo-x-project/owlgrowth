@@ -36,7 +36,7 @@ while ! ln "$lock_token" "$lock_file" 2>/dev/null; do
         lock_owner=""
         IFS= read -r lock_owner < "$lock_file" || lock_owner=""
         case "$lock_owner" in
-            ''|*[!0-9]*) rm -f "$lock_file" ;;
+            0|''|*[!0-9]*) rm -f "$lock_file" ;;
             *) if ! kill -0 "$lock_owner" 2>/dev/null; then rm -f "$lock_file" "$data_dir/.owlgrowth.lock.$lock_owner"; fi ;;
         esac
     fi
@@ -45,7 +45,7 @@ done
 lock_acquired=1
 
 exec 3<&0
-awk -v data_dir="$data_dir" -f "$script_dir/owlgrowth-mcp.awk" <&3 &
+LC_ALL=C awk -v data_dir="$data_dir" -f "$script_dir/owlgrowth-mcp.awk" <&3 &
 awk_pid="$!"
 exec 3<&-
 if wait "$awk_pid"; then status=0; else status="$?"; fi

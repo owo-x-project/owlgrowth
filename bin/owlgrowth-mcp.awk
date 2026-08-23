@@ -9,7 +9,9 @@ BEGIN {
     MAX_CONTEXT_TEXT = 512
     MAX_IDENTIFIER_TEXT = 256
     MAX_REQUEST_TEXT = 65536
+    MAX_RESPONSE_TEXT = 32768
     REQUEST_NOTIFICATION = 0
+    SHUTDOWN_REQUESTED = 0
     load_experiences()
     load_adaptations()
 }
@@ -107,7 +109,7 @@ function json_decode(s, i, c, out, hex, n, low_hex, low) {
                 hex = substr(s, i + 1, 4); n = hex_value(hex)
                 if (n >= 55296 && n <= 56319 && substr(s, i + 5, 2) == "\\u") {
                     low_hex = substr(s, i + 7, 4); low = hex_value(low_hex)
-                    if (low >= 56320 && low <= 57343) { n = 65536 + (n - 55296) * 1024 + low - 56320; out = out sprintf("%c", n); i += 10 }
+                    if (low >= 56320 && low <= 57343) { n = 65536 + (n - 55296) * 1024 + low - 56320; out = out utf8_encode(n); i += 10 }
                     else { out = out "\\u" hex; i += 4 }
                 } else if (n >= 55296 && n <= 57343) { out = out "\\u" hex; i += 4 }
                 else if (n == 8) { out = out "\b"; i += 4 }
@@ -116,13 +118,20 @@ function json_decode(s, i, c, out, hex, n, low_hex, low) {
                 else if (n == 12) { out = out "\f"; i += 4 }
                 else if (n == 13) { out = out "\r"; i += 4 }
                 else if (n < 32) { out = out "\\u" hex; i += 4 }
-                else { out = out sprintf("%c", n); i += 4 }
+                else { out = out utf8_encode(n); i += 4 }
             } else out = out c
         } else if (c == "\"") return out
         else out = out c
         i++
     }
     return out
+}
+
+function utf8_encode(n) {
+    if (n < 128) return sprintf("%c", n)
+    if (n < 2048) return sprintf("%c%c", 192 + int(n / 64), 128 + (n % 64))
+    if (n < 65536) return sprintf("%c%c%c", 224 + int(n / 4096), 128 + (int(n / 64) % 64), 128 + (n % 64))
+    return sprintf("%c%c%c%c", 240 + int(n / 262144), 128 + (int(n / 4096) % 64), 128 + (int(n / 64) % 64), 128 + (n % 64))
 }
 
 function hex_value(s, i, c, p, n) {
@@ -302,7 +311,9 @@ function load_experiences(line, id) {
     while ((getline line < exp_file) > 0) {
         if (valid_json(line) && persisted_experience(line)) {
             object_get(line, "id")
-            id = GET_STRING; exp_json[id] = line
+            id = GET_STRING
+            if (id in exp_json) continue
+            exp_json[id] = line
             object_get(line, "project"); exp_project[id] = GET_STRING
             object_get(line, "task"); exp_task[id] = GET_STRING
             object_get(line, "action"); exp_action[id] = GET_STRING
@@ -320,7 +331,9 @@ function load_adaptations(line, id) {
     while ((getline line < adapt_file) > 0) {
         if (valid_json(line) && persisted_adaptation(line)) {
             object_get(line, "id")
-            id = GET_STRING; adapt_json[id] = line
+            id = GET_STRING
+            if ((id in adapt_status) && adapt_status[id] == "retired") continue
+            adapt_json[id] = line
             object_get(line, "guidance"); adapt_guidance[id] = GET_STRING
             object_get(line, "scope"); adapt_scope[id] = GET_RAW
             object_get(line, "evidence"); adapt_evidence[id] = GET_RAW
@@ -332,7 +345,16 @@ function load_adaptations(line, id) {
     close(adapt_file)
 }
 
-function next_id(prefix) { sequence++; return prefix "-" systime() "-" sequence }
+function generated_id_in_use(prefix, candidate) {
+    if (prefix == "exp") return candidate in exp_json
+    if (prefix == "adapt") return candidate in adapt_json
+    return 0
+}
+
+function next_id(prefix, candidate) {
+    do { sequence++; candidate = prefix "-" systime() "-" sequence } while (generated_id_in_use(prefix, candidate))
+    return candidate
+}
 function append_record(file, record) { print record >> file; close(file) }
 function fail(message) { TOOL_ERROR = message; return 0 }
 
@@ -349,7 +371,7 @@ function required_nonempty_string(obj, name, label) {
 }
 
 function valid_identifier(value, label) {
-    if (value == "") return fail(label " requires a non-empty identifier")
+    if (value == "" || value ~ /^[[:space:]]*$/) return fail(label " requires a non-empty identifier")
     if (length(value) > MAX_IDENTIFIER_TEXT) return fail(label " identifier exceeds " MAX_IDENTIFIER_TEXT " characters")
     return 1
 }
@@ -359,6 +381,13 @@ function optional_string(obj, name, default_value, label) {
     if (GET_PRESENT && substr(GET_RAW, 1, 1) != "\"") { fail(label " requires string argument '" name "'"); return default_value }
     if (GET_PRESENT) return GET_STRING
     return default_value
+}
+
+function optional_nonempty_string(obj, name, default_value, label) {
+    object_get(obj, name)
+    if (!GET_PRESENT) return default_value
+    if (substr(GET_RAW, 1, 1) != "\"" || GET_STRING ~ /^[[:space:]]*$/) { fail(label " requires a non-empty string argument '" name "'"); return default_value }
+    return GET_STRING
 }
 
 function bounded_limit(obj, name, default_value, raw, value) {
@@ -464,23 +493,27 @@ function persisted_observation(item) {
     return 1
 }
 
-function persisted_evidence(raw, i, start, e, item, success, failure, other, observations) {
+function persisted_evidence(raw, i, start, e, item, success, failure, other, observations, observed_success, observed_failure, observed_other, result) {
     if (substr(raw, 1, 1) != "{" || !valid_json(raw)) return 0
     object_get(raw, "success"); if (!GET_PRESENT || GET_RAW !~ /^[0-9]+$/) return 0; success = GET_RAW + 0
     object_get(raw, "failure"); if (!GET_PRESENT || GET_RAW !~ /^[0-9]+$/) return 0; failure = GET_RAW + 0
     object_get(raw, "other"); if (!GET_PRESENT || GET_RAW !~ /^[0-9]+$/) return 0; other = GET_RAW + 0
     object_get(raw, "observations"); if (!GET_PRESENT || substr(GET_RAW, 1, 1) != "[" || !valid_json(GET_RAW)) return 0
-    observations = GET_RAW; i = ws(observations, 2)
+    observations = GET_RAW; observed_success = 0; observed_failure = 0; observed_other = 0; i = ws(observations, 2)
     while (i <= length(observations) && substr(observations, i, 1) != "]") {
         start = ws(observations, i); e = value_end(observations, start)
         if (e < start || substr(observations, start, 1) != "{" || !valid_json(substr(observations, start, e - start + 1))) return 0
         item = substr(observations, start, e - start + 1)
         if (!persisted_observation(item)) return 0
+        object_get(item, "result"); result = tolower(GET_STRING)
+        if (result == "success" || result == "pass" || result == "passed") observed_success++
+        else if (result == "failure" || result == "fail" || result == "failed") observed_failure++
+        else observed_other++
         i = ws(observations, e + 1)
         if (substr(observations, i, 1) == ",") i = ws(observations, i + 1)
         else if (substr(observations, i, 1) != "]") return 0
     }
-    return substr(observations, i, 1) == "]"
+    return substr(observations, i, 1) == "]" && observed_success == success && observed_failure == failure && observed_other == other
 }
 
 function persisted_experience(obj) {
@@ -622,6 +655,7 @@ function handle_request(line, method, id_present, params) {
     REQUEST_NOTIFICATION = 0
     if (length(line) > MAX_REQUEST_TEXT) { ID_RAW = "null"; rpc_error(-32600, "request exceeds " MAX_REQUEST_TEXT " characters"); return }
     if (!valid_json(line)) { ID_RAW = "null"; rpc_error(-32700, "parse error"); return }
+    object_get(line, "id"); REQUEST_NOTIFICATION = !GET_PRESENT
     object_get(line, "jsonrpc")
     if (!GET_PRESENT || GET_RAW != "\"2.0\"") { ID_RAW = "null"; rpc_error(-32600, "request requires jsonrpc 2.0"); return }
     ID_RAW = "null"; object_get(line, "id"); id_present = GET_PRESENT
@@ -636,13 +670,15 @@ function handle_request(line, method, id_present, params) {
     object_get(line, "params")
     if (GET_PRESENT && substr(GET_RAW, 1, 1) != "{" && substr(GET_RAW, 1, 1) != "[") { if (id_present) rpc_error(-32600, "request params must be an object or array"); return }
     if (method == "notifications/initialized" || method == "notifications/cancelled") return
+    if (method == "exit") exit 0
+    if (SHUTDOWN_REQUESTED) { if (id_present) rpc_error(-32600, "server is shutting down"); return }
     if (method == "initialize") { rpc_result("{\"protocolVersion\":\"2024-11-05\",\"capabilities\":{\"tools\":{},\"resources\":{\"subscribe\":false,\"listChanged\":false}},\"serverInfo\":{\"name\":\"owlgrowth\",\"version\":\"0.1.0\"}}"); return }
     if (method == "ping") { rpc_result("{}"); return }
     if (method == "tools/list") { rpc_result(tools_json()); return }
     if (method == "resources/list") { rpc_result(resources_json()); return }
     if (method == "resources/read") { object_get(line, "params"); params = (GET_PRESENT ? GET_RAW : "{}"); resource_read(params); return }
     if (method == "tools/call") { object_get(line, "params"); params = (GET_PRESENT ? GET_RAW : "{}"); tool_call(params); return }
-    if (method == "shutdown") { rpc_result("null"); return }
+    if (method == "shutdown") { SHUTDOWN_REQUESTED = 1; rpc_result("null"); return }
     if (id_present) rpc_error(-32601, "method not found: " method)
 }
 
@@ -650,6 +686,7 @@ function rpc_result(result) { if (REQUEST_NOTIFICATION) return; print "{\"jsonrp
 function rpc_error(code, message) { if (REQUEST_NOTIFICATION) return; print "{\"jsonrpc\":\"2.0\",\"id\":" ID_RAW ",\"error\":{\"code\":" code ",\"message\":" json_escape(message) "}}"; fflush() }
 function tool_text(message, is_error) {
     if (REQUEST_NOTIFICATION) return
+    if (length(message) > MAX_RESPONSE_TEXT) message = "{\"truncated\":true,\"bytes\":" length(message) "}"
     print "{\"jsonrpc\":\"2.0\",\"id\":" ID_RAW ",\"result\":{\"content\":[{\"type\":\"text\",\"text\":" json_escape(message) "}]" (is_error ? ",\"isError\":true" : "") "}}"
     fflush()
 }
@@ -744,7 +781,7 @@ function record_experience(args, task, action, outcome, evidence, project, occur
     if (!required_nonempty_string(args, "action", "record_experience")) return; action = GET_STRING
     outcome = required_meaningful_raw(args, "outcome", "record_experience"); if (!outcome) return
     evidence = required_meaningful_raw(args, "evidence", "record_experience"); if (!evidence) return
-    project = optional_string(args, "project", "current", "record_experience"); if (TOOL_ERROR != "") return
+    project = optional_nonempty_string(args, "project", "current", "record_experience"); if (TOOL_ERROR != "") return
     occurred = optional_string(args, "occurred_at", "", "record_experience"); if (TOOL_ERROR != "") return
     id = optional_string(args, "experience_id", "", "record_experience"); if (TOOL_ERROR != "") return
     if (id != "" && !valid_identifier(id, "record_experience")) return
@@ -801,7 +838,7 @@ function observe_adaptation(args, id, result, evidence, project, task, ecosystem
     if (!required_nonempty_string(args, "result", "observe_adaptation")) return; result = GET_STRING
     evidence = required_meaningful_raw(args, "evidence", "observe_adaptation"); if (!evidence) return
     if (adapt_status[id] == "retired") { fail("cannot observe retired adaptation: " id); return }
-    project = optional_string(args, "project", "current", "observe_adaptation"); if (TOOL_ERROR != "") return
+    project = optional_nonempty_string(args, "project", "current", "observe_adaptation"); if (TOOL_ERROR != "") return
     task = optional_string(args, "task", "", "observe_adaptation"); if (TOOL_ERROR != "") return
     ecosystem = optional_string(args, "ecosystem", "", "observe_adaptation"); if (TOOL_ERROR != "") return
     observed = optional_string(args, "observed_at", "", "observe_adaptation"); if (TOOL_ERROR != "") return

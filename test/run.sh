@@ -19,6 +19,20 @@ printf '%s\n' "$out" | grep '"protocolVersion":"2024-11-05"' >/dev/null
 out=$(call '{"jsonrpc":"2.0","method":"ping"}')
 [ -z "$out" ]
 
+out=$(printf '%s\n' '{"jsonrpc":"1.0","method":"ping"}' '{"jsonrpc":"2.0","method":"ping"}' | OWL_GROWTH_DATA_DIR="$tmp/notification-data" "$root/bin/owlgrowth-mcp")
+[ -z "$out" ]
+
+zero_lock_data="$tmp/zero-lock-data"
+mkdir -p "$zero_lock_data"
+printf '%s\n' '0' > "$zero_lock_data/.owlgrowth.lock"
+out=$(call_data "$zero_lock_data" '{"jsonrpc":"2.0","id":102,"method":"ping"}')
+printf '%s\n' "$out" | grep '"result":{}' >/dev/null
+[ ! -e "$zero_lock_data/.owlgrowth.lock" ]
+
+out=$(printf '%s\n' '{"jsonrpc":"2.0","id":101,"method":"shutdown"}' '{"jsonrpc":"2.0","method":"exit"}' '{"jsonrpc":"2.0","id":102,"method":"ping"}' | OWL_GROWTH_DATA_DIR="$tmp/lifecycle-data" "$root/bin/owlgrowth-mcp")
+[ "$(printf '%s\n' "$out" | wc -l)" -eq 1 ]
+printf '%s\n' "$out" | grep '"result":null' >/dev/null
+
 out=$(call '{"jsonrpc":"1.0","id":1,"method":"ping"}')
 printf '%s\n' "$out" | grep 'requires jsonrpc 2.0' >/dev/null
 
@@ -41,6 +55,14 @@ out=$(call '{"jsonrpc":"2.0","id":31,"method":"tools/call","params":{"name":"rec
 printf '%s\n' "$out" | grep 'emoji-' >/dev/null
 out=$(call '{"jsonrpc":"2.0","id":32,"method":"tools/call","params":{"name":"record_experience","arguments":{"experience_id":"emoji-😀","task":"unicode duplicate","action":"record","outcome":"success","evidence":"duplicate"}}}')
 printf '%s\n' "$out" | grep 'experience already exists' >/dev/null
+printf '%s\n' "$out" | jq -e . >/dev/null
+
+out=$(call '{"jsonrpc":"2.0","id":33,"method":"tools/call","params":{"name":"record_experience","arguments":{"experience_id":"whitespace-id","project":" ","task":"whitespace id","action":"reject","outcome":"success","evidence":"must reject"}}}')
+printf '%s\n' "$out" | grep 'requires a non-empty string argument' >/dev/null
+if grep 'whitespace-id' "$tmp/data/experiences.jsonl" >/dev/null; then exit 1; fi
+
+out=$(call '{"jsonrpc":"2.0","id":34,"method":"tools/call","params":{"name":"record_experience","arguments":{"experience_id":" ","task":"whitespace identifier","action":"reject","outcome":"success","evidence":"must reject"}}}')
+printf '%s\n' "$out" | grep 'requires a non-empty identifier' >/dev/null
 
 out=$(call '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"record_adaptation","arguments":{"adaptation_id":"adapt-lockfile","guidance":"check the lockfile before changing dependencies","scope":{"ecosystem":"node","task":"dependency debugging"},"source_experience_ids":["exp-a"]}}}')
 printf '%s\n' "$out" | grep 'adapt-lockfile' >/dev/null
@@ -110,8 +132,12 @@ out=$(call '{"jsonrpc":"2.0","id":24,"method":"tools/call","params":{"name":"rec
 printf '%s\n' "$out" | grep 'requires a valid object argument' >/dev/null
 
 out=$(call '{"jsonrpc":"2.0","id":25,"method":"tools/call","params":{"name":"record_experience","arguments":{"experience_id":"bad-optional-type","project":123,"task":"t","action":"a","outcome":"o","evidence":"e"}}}')
-printf '%s\n' "$out" | grep 'requires string argument' >/dev/null
+printf '%s\n' "$out" | grep 'requires .*string argument' >/dev/null
 if grep 'bad-optional-type' "$tmp/data/experiences.jsonl" >/dev/null; then exit 1; fi
+
+out=$(call '{"jsonrpc":"2.0","id":251,"method":"tools/call","params":{"name":"record_experience","arguments":{"experience_id":"empty-project","project":"","task":"t","action":"a","outcome":"o","evidence":"e"}}}')
+printf '%s\n' "$out" | grep 'non-empty string argument' >/dev/null
+if grep 'empty-project' "$tmp/data/experiences.jsonl" >/dev/null; then exit 1; fi
 
 out=$(call '{"jsonrpc":"2.0","id":26,"method":"tools/call","params":{"name":"record_experience","arguments":{"experience_id":"bad-whitespace","task":"t","action":"a","outcome":" ","evidence":"  "}}}')
 printf '%s\n' "$out" | grep 'non-empty argument' >/dev/null
@@ -123,6 +149,9 @@ if grep 'duplicate-source-ids' "$tmp/data/adaptations.jsonl" >/dev/null; then ex
 
 out=$(call '{"jsonrpc":"2.0","id":28,"method":"tools/call","params":{"name":"observe_adaptation","arguments":{"adaptation_id":"adapt-lockfile","project":"project-a","task":"dependency debugging","result":"success","evidence":"missing ecosystem"}}}')
 printf '%s\n' "$out" | grep 'requires ecosystem' >/dev/null
+
+out=$(call '{"jsonrpc":"2.0","id":281,"method":"tools/call","params":{"name":"observe_adaptation","arguments":{"adaptation_id":"adapt-lockfile","project":"","task":"dependency debugging","ecosystem":"node","result":"success","evidence":"empty project must not be persisted"}}}')
+printf '%s\n' "$out" | grep 'non-empty string argument' >/dev/null
 
 call '{"jsonrpc":"2.0","id":80,"method":"tools/call","params":{"name":"record_adaptation","arguments":{"adaptation_id":"adapt-detail","guidance":"detail guidance","scope":{"task":"detail"},"source_experience_ids":["exp-a"]}}}' >/dev/null
 n=1
@@ -209,6 +238,10 @@ reload_data="$tmp/reload-data"
 mkdir -p "$reload_data"
 printf '%s\n' '{"id":"reload-exp","kind":"experience","project":"reload-project","task":"reload","action":"validated action","outcome":"success","evidence":"observed"}' > "$reload_data/experiences.jsonl"
 printf '%s\n' '{"id":"reload-good","kind":"adaptation","guidance":"reload guidance","scope":{"task":"reload"},"source_experience_ids":["reload-exp"],"evidence":{"success":0,"failure":0,"other":0,"observations":[]},"status":"active"}' > "$reload_data/adaptations.jsonl"
+printf '%s\n' '{"id":"reload-counter","kind":"adaptation","guidance":"must be ignored","scope":{"task":"reload"},"source_experience_ids":["reload-exp"],"evidence":{"success":99,"failure":0,"other":0,"observations":[]},"status":"active"}' >> "$reload_data/adaptations.jsonl"
+printf '%s\n' '{"id":"reload-retired","kind":"adaptation","guidance":"retired guidance","scope":{"task":"reload"},"source_experience_ids":["reload-exp"],"evidence":{"success":0,"failure":0,"other":0,"observations":[]},"status":"active"}' >> "$reload_data/adaptations.jsonl"
+printf '%s\n' '{"id":"reload-retired","kind":"adaptation","guidance":"retired guidance","scope":{"task":"reload"},"source_experience_ids":["reload-exp"],"evidence":{"success":0,"failure":0,"other":0,"observations":[]},"status":"retired"}' >> "$reload_data/adaptations.jsonl"
+printf '%s\n' '{"id":"reload-retired","kind":"adaptation","guidance":"stale active guidance","scope":{"task":"reload"},"source_experience_ids":["reload-exp"],"evidence":{"success":0,"failure":0,"other":0,"observations":[]},"status":"active"}' >> "$reload_data/adaptations.jsonl"
 printf '%s\n' '{"id":"reload-unknown","kind":"adaptation","guidance":"must be ignored","scope":{"task":"reload"},"source_experience_ids":["missing"],"evidence":{"success":0,"failure":0,"other":0,"observations":[]},"status":"active"}' >> "$reload_data/adaptations.jsonl"
 printf '%s\n' '{"id":"reload-duplicate","kind":"adaptation","guidance":"must be ignored","scope":{"task":"reload"},"source_experience_ids":["reload-exp","reload-exp"],"evidence":{"success":0,"failure":0,"other":0,"observations":[]},"status":"active"}' >> "$reload_data/adaptations.jsonl"
 printf '%s\n' '{"id":"reload-unknown-scope","kind":"adaptation","guidance":"must be ignored","scope":{"task":"reload","unknown":"field"},"source_experience_ids":["reload-exp"],"evidence":{"success":0,"failure":0,"other":0,"observations":[]},"status":"active"}' >> "$reload_data/adaptations.jsonl"
@@ -216,7 +249,34 @@ printf '%s\n' '{"id":"reload-duplicate-key","id":"reload-duplicate-key","kind":"
 out=$(call_data "$reload_data" '{"jsonrpc":"2.0","id":475,"method":"tools/call","params":{"name":"recommend_action","arguments":{"task":"reload"}}}')
 printf '%s\n' "$out" | grep 'count.*1' >/dev/null
 printf '%s\n' "$out" | grep 'reload-good' >/dev/null
-if printf '%s\n' "$out" | grep 'reload-unknown\|reload-duplicate\|reload-unknown-scope\|reload-duplicate-key' >/dev/null; then exit 1; fi
+if printf '%s\n' "$out" | grep 'reload-counter\|reload-retired\|reload-unknown\|reload-duplicate\|reload-unknown-scope\|reload-duplicate-key' >/dev/null; then exit 1; fi
+
+duplicate_data="$tmp/duplicate-experience-data"
+mkdir -p "$duplicate_data"
+printf '%s\n' '{"id":"immutable-duplicate","kind":"experience","project":"p","task":"first fact","action":"a1","outcome":"success","evidence":"e1"}' > "$duplicate_data/experiences.jsonl"
+printf '%s\n' '{"id":"immutable-duplicate","kind":"experience","project":"p","task":"second fact","action":"a2","outcome":"failure","evidence":"e2"}' >> "$duplicate_data/experiences.jsonl"
+out=$(call_data "$duplicate_data" '{"jsonrpc":"2.0","id":477,"method":"tools/call","params":{"name":"find_experiences","arguments":{"query":"first fact"}}}')
+printf '%s\n' "$out" | grep 'first fact' >/dev/null
+if printf '%s\n' "$out" | grep 'second fact' >/dev/null; then exit 1; fi
+
+collision_data="$tmp/generated-id-collision-data"
+mkdir -p "$collision_data"
+collision_epoch=$(date +%s)
+printf '%s\n' "{\"id\":\"exp-$collision_epoch-2\",\"kind\":\"experience\",\"project\":\"collision\",\"task\":\"collision seed\",\"action\":\"seed\",\"outcome\":\"success\",\"evidence\":\"seed\"}" > "$collision_data/experiences.jsonl"
+out=$(call_data "$collision_data" '{"jsonrpc":"2.0","id":478,"method":"tools/call","params":{"name":"record_experience","arguments":{"project":"collision","task":"collision generated","action":"generate","outcome":"success","evidence":"generated"}}}')
+printf '%s\n' "$out" | grep 'Recorded observed experience' >/dev/null
+[ "$(wc -l < "$collision_data/experiences.jsonl")" -eq 2 ]
+
+response_data="$tmp/response-bound-data"
+mkdir -p "$response_data"
+response_text=$(awk 'BEGIN { for (i = 1; i <= 6000; i++) printf "r" }')
+n=1
+while [ "$n" -le 20 ]; do
+    call_data "$response_data" "{\"jsonrpc\":\"2.0\",\"id\":$((480 + n)),\"method\":\"tools/call\",\"params\":{\"name\":\"record_experience\",\"arguments\":{\"experience_id\":\"response-$n\",\"task\":\"response bound\",\"action\":\"$response_text\",\"outcome\":\"$response_text\",\"evidence\":\"$response_text\"}}}" >/dev/null
+    n=$((n + 1))
+done
+out=$(call_data "$response_data" '{"jsonrpc":"2.0","id":501,"method":"tools/call","params":{"name":"find_experiences","arguments":{"query":"response bound","limit":20}}}')
+printf '%s\n' "$out" | grep 'truncated.*bytes' >/dev/null
 
 malformed_lock_data="$tmp/malformed-lock-data"
 mkdir -p "$malformed_lock_data"
