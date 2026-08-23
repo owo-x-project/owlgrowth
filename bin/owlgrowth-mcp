@@ -11,21 +11,43 @@ mkdir -p "$data_dir"
 
 lock_file="$data_dir/.owlgrowth.lock"
 lock_token="$data_dir/.owlgrowth.lock.$$"
+lock_acquired=0
+awk_pid=""
 cleanup() {
-    rm -f "$lock_token" "$lock_file"
+    rm -f "$lock_token"
+    if [ "$lock_acquired" -eq 1 ]; then
+        lock_owner=""
+        IFS= read -r lock_owner < "$lock_file" || lock_owner=""
+        if [ "$lock_owner" = "$$" ]; then rm -f "$lock_file"; fi
+    fi
 }
-trap cleanup EXIT HUP INT TERM
+terminate() {
+    status="$1"
+    if [ -n "$awk_pid" ]; then kill -TERM "$awk_pid" 2>/dev/null || true; fi
+    exit "$status"
+}
+trap cleanup EXIT
+trap 'terminate 129' HUP
+trap 'terminate 130' INT
+trap 'terminate 143' TERM
 printf '%s\n' "$$" > "$lock_token"
 while ! ln "$lock_token" "$lock_file" 2>/dev/null; do
     if [ -r "$lock_file" ]; then
         lock_owner=""
         IFS= read -r lock_owner < "$lock_file" || lock_owner=""
-        if [ -n "$lock_owner" ] && ! kill -0 "$lock_owner" 2>/dev/null; then
-            rm -f "$lock_file"
-        fi
+        case "$lock_owner" in
+            ''|*[!0-9]*) rm -f "$lock_file" ;;
+            *) if ! kill -0 "$lock_owner" 2>/dev/null; then rm -f "$lock_file" "$data_dir/.owlgrowth.lock.$lock_owner"; fi ;;
+        esac
     fi
     sleep 1
 done
-rm -f "$lock_token"
+lock_acquired=1
 
-awk -v data_dir="$data_dir" -f "$script_dir/owlgrowth-mcp.awk"
+exec 3<&0
+awk -v data_dir="$data_dir" -f "$script_dir/owlgrowth-mcp.awk" <&3 &
+awk_pid="$!"
+exec 3<&-
+if wait "$awk_pid"; then status=0; else status="$?"; fi
+awk_pid=""
+exit "$status"

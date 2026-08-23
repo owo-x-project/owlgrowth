@@ -8,6 +8,7 @@ BEGIN {
     MAX_CONTEXT_ITEMS = 20
     MAX_CONTEXT_TEXT = 512
     MAX_IDENTIFIER_TEXT = 256
+    MAX_REQUEST_TEXT = 65536
     REQUEST_NOTIFICATION = 0
     load_experiences()
     load_adaptations()
@@ -192,18 +193,24 @@ function json_parse_array(s, c) {
     }
 }
 
-function json_parse_object(s, c) {
+function json_parse_object(s, c, key_start, key_end, key, depth, marker) {
+    JSON_OBJECT_DEPTH++; depth = JSON_OBJECT_DEPTH
+    for (marker in json_object_keys) if (substr(marker, 1, length(depth) + 1) == depth SUBSEP) delete json_object_keys[marker]
     JSON_POS++; json_skip_ws(s)
-    if (substr(s, JSON_POS, 1) == "}") { JSON_POS++; return }
+    if (substr(s, JSON_POS, 1) == "}") { JSON_POS++; JSON_OBJECT_DEPTH--; return }
     while (JSON_OK) {
-        json_parse_string(s); if (!JSON_OK) return
-        json_skip_ws(s); if (substr(s, JSON_POS, 1) != ":") { JSON_OK = 0; return }
-        JSON_POS++; json_parse_value(s); if (!JSON_OK) return
+        key_start = JSON_POS; json_parse_string(s); if (!JSON_OK) { JSON_OBJECT_DEPTH--; return }
+        key_end = JSON_POS; key = json_decode(substr(s, key_start, key_end - key_start)); marker = depth SUBSEP key
+        if (marker in json_object_keys) { JSON_OK = 0; JSON_OBJECT_DEPTH--; return }
+        json_object_keys[marker] = 1
+        json_skip_ws(s); if (substr(s, JSON_POS, 1) != ":") { JSON_OK = 0; JSON_OBJECT_DEPTH--; return }
+        JSON_POS++; json_parse_value(s); if (!JSON_OK) { JSON_OBJECT_DEPTH--; return }
         json_skip_ws(s); c = substr(s, JSON_POS, 1)
-        if (c == "}") { JSON_POS++; return }
-        if (c != ",") { JSON_OK = 0; return }
+        if (c == "}") { JSON_POS++; JSON_OBJECT_DEPTH--; return }
+        if (c != ",") { JSON_OK = 0; JSON_OBJECT_DEPTH--; return }
         JSON_POS++; json_skip_ws(s)
     }
+    JSON_OBJECT_DEPTH--
 }
 
 function json_parse_value(s, c) {
@@ -220,7 +227,8 @@ function json_parse_value(s, c) {
 
 function valid_json(s) {
     if (s == "") return 0
-    JSON_POS = 1; JSON_OK = 1; json_parse_value(s); json_skip_ws(s)
+    for (JSON_KEY in json_object_keys) delete json_object_keys[JSON_KEY]
+    JSON_OBJECT_DEPTH = 0; JSON_POS = 1; JSON_OK = 1; json_parse_value(s); json_skip_ws(s)
     return JSON_OK && JSON_POS > length(s)
 }
 
@@ -356,7 +364,9 @@ function optional_string(obj, name, default_value, label) {
 function bounded_limit(obj, name, default_value, raw, value) {
     object_get(obj, name)
     value = default_value
-    if (GET_PRESENT && GET_RAW ~ /^[0-9]+$/) value = GET_RAW + 0
+    if (GET_PRESENT && GET_RAW !~ /^[0-9]+$/) { fail("requires a positive integer argument '" name "'"); return default_value }
+    if (GET_PRESENT) value = GET_RAW + 0
+    if (GET_PRESENT && value < 1) { fail("requires a positive integer argument '" name "'"); return default_value }
     if (value < 1) value = 1
     if (value > MAX_CONTEXT_ITEMS) value = MAX_CONTEXT_ITEMS
     return value
@@ -382,6 +392,11 @@ function persisted_string(obj, name, nonempty) {
     return GET_PRESENT && substr(GET_RAW, 1, 1) == "\"" && (!nonempty || GET_STRING !~ /^[[:space:]]*$/)
 }
 
+function persisted_optional_string(obj, name) {
+    object_get(obj, name)
+    return !GET_PRESENT || substr(GET_RAW, 1, 1) == "\""
+}
+
 function persisted_kind(obj, expected) {
     object_get(obj, "kind")
     return GET_PRESENT && GET_RAW == json_escape(expected)
@@ -392,12 +407,93 @@ function persisted_json_field(obj, name, first, raw) {
     return raw != "" && valid_json(raw) && (first == "" || substr(raw, 1, 1) == first)
 }
 
-function persisted_experience(obj) {
-    return persisted_kind(obj, "experience") && persisted_string(obj, "id", 1) && persisted_string(obj, "project", 1) && persisted_string(obj, "task", 1) && persisted_string(obj, "action", 1) && persisted_json_field(obj, "outcome", "") && meaningful_raw(GET_RAW) && persisted_json_field(obj, "evidence", "") && meaningful_raw(GET_RAW)
+function persisted_identifier(obj, name) { object_get(obj, name); return GET_PRESENT && substr(GET_RAW, 1, 1) == "\"" && GET_STRING !~ /^[[:space:]]*$/ && length(GET_STRING) <= MAX_IDENTIFIER_TEXT }
+
+function persisted_scope_shape(raw, i, e, k_end, key, start) {
+    if (substr(raw, 1, 1) != "{" || !valid_json(raw)) return 0
+    i = ws(raw, 2)
+    while (i <= length(raw) && substr(raw, i, 1) != "}") {
+        if (substr(raw, i, 1) != "\"") return 0
+        k_end = string_end(raw, i); if (k_end < 0) return 0
+        key = json_decode(substr(raw, i, k_end - i + 1))
+        if (key != "project" && key != "task" && key != "ecosystem") return 0
+        start = ws(raw, k_end + 1); if (substr(raw, start, 1) != ":") return 0
+        e = value_end(raw, ws(raw, start + 1)); if (e < start) return 0
+        i = ws(raw, e + 1)
+        if (substr(raw, i, 1) == ",") i = ws(raw, i + 1)
+        else if (substr(raw, i, 1) != "}") return 0
+    }
+    return substr(raw, i, 1) == "}"
 }
 
-function persisted_adaptation(obj) {
-    return persisted_kind(obj, "adaptation") && persisted_string(obj, "id", 1) && persisted_string(obj, "guidance", 1) && persisted_json_field(obj, "scope", "{") && persisted_json_field(obj, "source_experience_ids", "[") && persisted_json_field(obj, "evidence", "{") && persisted_string(obj, "status", 1)
+function persisted_scope(raw, field) {
+    if (!persisted_scope_shape(raw)) return 0
+    for (field in persisted_scope_fields) delete persisted_scope_fields[field]
+    object_get(raw, "project"); if (GET_PRESENT) { if (substr(GET_RAW, 1, 1) != "\"" || GET_STRING ~ /^[[:space:]]*$/) return 0; persisted_scope_fields["project"] = 1 }
+    object_get(raw, "task"); if (GET_PRESENT) { if (substr(GET_RAW, 1, 1) != "\"" || GET_STRING ~ /^[[:space:]]*$/) return 0; persisted_scope_fields["task"] = 1 }
+    object_get(raw, "ecosystem"); if (GET_PRESENT) { if (substr(GET_RAW, 1, 1) != "\"" || GET_STRING ~ /^[[:space:]]*$/) return 0; persisted_scope_fields["ecosystem"] = 1 }
+    return 1
+}
+
+function persisted_experience_ids(raw, i, start, e, item) {
+    if (substr(raw, 1, 1) != "[" || !valid_json(raw)) return 0
+    for (item in persisted_experience_id_seen) delete persisted_experience_id_seen[item]
+    i = ws(raw, 2)
+    if (substr(raw, i, 1) == "]") return 0
+    while (i <= length(raw)) {
+        start = ws(raw, i); e = value_end(raw, start)
+        if (e < start || substr(raw, start, 1) != "\"") return 0
+        item = json_decode(substr(raw, start, e - start + 1))
+        if (item == "" || length(item) > MAX_IDENTIFIER_TEXT || !(item in exp_json) || (item in persisted_experience_id_seen)) return 0
+        persisted_experience_id_seen[item] = 1
+        i = ws(raw, e + 1)
+        if (substr(raw, i, 1) == ",") i = ws(raw, i + 1)
+        else if (substr(raw, i, 1) == "]") return 1
+        else return 0
+    }
+    return 0
+}
+
+function persisted_observation(item) {
+    object_get(item, "project"); if (!GET_PRESENT || substr(GET_RAW, 1, 1) != "\"" || GET_STRING ~ /^[[:space:]]*$/) return 0
+    object_get(item, "result"); if (!GET_PRESENT || substr(GET_RAW, 1, 1) != "\"" || GET_STRING ~ /^[[:space:]]*$/) return 0
+    object_get(item, "evidence"); if (!GET_PRESENT || !valid_json(GET_RAW) || !meaningful_raw(GET_RAW)) return 0
+    object_get(item, "task"); if (GET_PRESENT && substr(GET_RAW, 1, 1) != "\"") return 0
+    object_get(item, "ecosystem"); if (GET_PRESENT && substr(GET_RAW, 1, 1) != "\"") return 0
+    object_get(item, "observed_at"); if (GET_PRESENT && substr(GET_RAW, 1, 1) != "\"") return 0
+    return 1
+}
+
+function persisted_evidence(raw, i, start, e, item, success, failure, other, observations) {
+    if (substr(raw, 1, 1) != "{" || !valid_json(raw)) return 0
+    object_get(raw, "success"); if (!GET_PRESENT || GET_RAW !~ /^[0-9]+$/) return 0; success = GET_RAW + 0
+    object_get(raw, "failure"); if (!GET_PRESENT || GET_RAW !~ /^[0-9]+$/) return 0; failure = GET_RAW + 0
+    object_get(raw, "other"); if (!GET_PRESENT || GET_RAW !~ /^[0-9]+$/) return 0; other = GET_RAW + 0
+    object_get(raw, "observations"); if (!GET_PRESENT || substr(GET_RAW, 1, 1) != "[" || !valid_json(GET_RAW)) return 0
+    observations = GET_RAW; i = ws(observations, 2)
+    while (i <= length(observations) && substr(observations, i, 1) != "]") {
+        start = ws(observations, i); e = value_end(observations, start)
+        if (e < start || substr(observations, start, 1) != "{" || !valid_json(substr(observations, start, e - start + 1))) return 0
+        item = substr(observations, start, e - start + 1)
+        if (!persisted_observation(item)) return 0
+        i = ws(observations, e + 1)
+        if (substr(observations, i, 1) == ",") i = ws(observations, i + 1)
+        else if (substr(observations, i, 1) != "]") return 0
+    }
+    return substr(observations, i, 1) == "]"
+}
+
+function persisted_experience(obj) {
+    return persisted_kind(obj, "experience") && persisted_identifier(obj, "id") && persisted_string(obj, "project", 1) && persisted_string(obj, "task", 1) && persisted_string(obj, "action", 1) && persisted_json_field(obj, "outcome", "") && meaningful_raw(GET_RAW) && persisted_json_field(obj, "evidence", "") && meaningful_raw(GET_RAW) && persisted_optional_string(obj, "occurred_at")
+}
+
+function persisted_adaptation(obj, scope, sources, evidence, status) {
+    if (!(persisted_kind(obj, "adaptation") && persisted_identifier(obj, "id") && persisted_string(obj, "guidance", 1))) return 0
+    object_get(obj, "scope"); if (!GET_PRESENT || !persisted_scope(GET_RAW)) return 0; scope = GET_RAW
+    object_get(obj, "source_experience_ids"); if (!GET_PRESENT || !persisted_experience_ids(GET_RAW)) return 0; sources = GET_RAW
+    object_get(obj, "evidence"); if (!GET_PRESENT || !persisted_evidence(GET_RAW)) return 0; evidence = GET_RAW
+    object_get(obj, "status"); if (!GET_PRESENT || substr(GET_RAW, 1, 1) != "\"") return 0; status = GET_STRING
+    return status == "active" || status == "retired"
 }
 
 function array_item_count(raw, i, start, e, count) {
@@ -481,14 +577,24 @@ function required_object(obj, name, label) {
     return GET_RAW
 }
 
-function valid_scope(raw, label) {
+function valid_scope(raw, label, i, k_end, key, start, e) {
     if (substr(raw, 1, 1) != "{" || !valid_json(raw)) return fail(label " requires a valid object argument 'scope'")
-    object_get(raw, "project")
-    if (GET_PRESENT && (substr(GET_RAW, 1, 1) != "\"" || GET_STRING ~ /^[[:space:]]*$/)) return fail(label " scope field 'project' must be a non-empty string")
-    object_get(raw, "task")
-    if (GET_PRESENT && (substr(GET_RAW, 1, 1) != "\"" || GET_STRING ~ /^[[:space:]]*$/)) return fail(label " scope field 'task' must be a non-empty string")
-    object_get(raw, "ecosystem")
-    if (GET_PRESENT && (substr(GET_RAW, 1, 1) != "\"" || GET_STRING ~ /^[[:space:]]*$/)) return fail(label " scope field 'ecosystem' must be a non-empty string")
+    i = ws(raw, 2)
+    while (i <= length(raw) && substr(raw, i, 1) != "}") {
+        if (substr(raw, i, 1) != "\"") return fail(label " scope must be an object")
+        k_end = string_end(raw, i); if (k_end < 0) return fail(label " requires a valid object argument 'scope'")
+        key = json_decode(substr(raw, i, k_end - i + 1))
+        if (key != "project" && key != "task" && key != "ecosystem") return fail(label " scope contains unknown field '" key "'")
+        start = ws(raw, k_end + 1); if (substr(raw, start, 1) != ":") return fail(label " requires a valid object argument 'scope'")
+        e = value_end(raw, ws(raw, start + 1)); if (e < start) return fail(label " requires a valid object argument 'scope'")
+        if (substr(raw, ws(raw, start + 1), 1) != "\"") return fail(label " scope field '" key "' must be a non-empty string")
+        object_get(raw, key)
+        if (GET_STRING ~ /^[[:space:]]*$/) return fail(label " scope field '" key "' must be a non-empty string")
+        i = ws(raw, e + 1)
+        if (substr(raw, i, 1) == ",") i = ws(raw, i + 1)
+        else if (substr(raw, i, 1) != "}") return fail(label " requires a valid object argument 'scope'")
+    }
+    if (substr(raw, i, 1) != "}") return fail(label " requires a valid object argument 'scope'")
     return 1
 }
 
@@ -514,6 +620,7 @@ function validate_experience_ids(raw, label, i, start, e, item) {
 
 function handle_request(line, method, id_present, params) {
     REQUEST_NOTIFICATION = 0
+    if (length(line) > MAX_REQUEST_TEXT) { ID_RAW = "null"; rpc_error(-32600, "request exceeds " MAX_REQUEST_TEXT " characters"); return }
     if (!valid_json(line)) { ID_RAW = "null"; rpc_error(-32700, "parse error"); return }
     object_get(line, "jsonrpc")
     if (!GET_PRESENT || GET_RAW != "\"2.0\"") { ID_RAW = "null"; rpc_error(-32600, "request requires jsonrpc 2.0"); return }
@@ -526,6 +633,8 @@ function handle_request(line, method, id_present, params) {
     object_get(line, "method")
     if (!GET_PRESENT || substr(GET_RAW, 1, 1) != "\"") { if (id_present) rpc_error(-32600, "request requires string method"); return }
     method = GET_STRING
+    object_get(line, "params")
+    if (GET_PRESENT && substr(GET_RAW, 1, 1) != "{" && substr(GET_RAW, 1, 1) != "[") { if (id_present) rpc_error(-32600, "request params must be an object or array"); return }
     if (method == "notifications/initialized" || method == "notifications/cancelled") return
     if (method == "initialize") { rpc_result("{\"protocolVersion\":\"2024-11-05\",\"capabilities\":{\"tools\":{},\"resources\":{\"subscribe\":false,\"listChanged\":false}},\"serverInfo\":{\"name\":\"owlgrowth\",\"version\":\"0.1.0\"}}"); return }
     if (method == "ping") { rpc_result("{}"); return }
@@ -754,7 +863,7 @@ function match_scope(scope_raw, query_raw, query_text, project, field, requested
 function find_experiences(args, query, project, limit, id, count, list, truncated) {
     query = optional_string(args, "query", "", "find_experiences"); if (TOOL_ERROR != "") return
     project = optional_string(args, "project", "", "find_experiences"); if (TOOL_ERROR != "") return
-    limit = bounded_limit(args, "limit", MAX_CONTEXT_ITEMS)
+    limit = bounded_limit(args, "limit", MAX_CONTEXT_ITEMS); if (TOOL_ERROR != "") return
     for (id in experience_used) delete experience_used[id]
     list = "["; count = 0
     while (count < limit && (id = next_experience(experience_used, query, project)) != "") { experience_used[id] = 1; if (count > 0) list = list ","; list = list experience_summary(id); count++ }
@@ -767,7 +876,7 @@ function recommend_action(args, task, project, scope_raw, id, count, list, limit
     project = optional_string(args, "project", "", "recommend_action"); if (TOOL_ERROR != "") return
     object_get(args, "scope"); scope_raw = (GET_PRESENT ? GET_RAW : "")
     if (scope_raw != "" && !valid_scope(scope_raw, "recommend_action")) return
-    limit = bounded_limit(args, "limit", MAX_CONTEXT_ITEMS)
+    limit = bounded_limit(args, "limit", MAX_CONTEXT_ITEMS); if (TOOL_ERROR != "") return
     split("project ecosystem task", scope_fields, " ")
     for (id in recommendation_used) delete recommendation_used[id]
     list = "["; count = 0; truncated = 0

@@ -25,6 +25,12 @@ printf '%s\n' "$out" | grep 'requires jsonrpc 2.0' >/dev/null
 out=$(call '{"jsonrpc":"2.0","id":{"bad":1},"method":"ping"}')
 printf '%s\n' "$out" | grep 'request id must be a string' >/dev/null
 
+out=$(call '{"jsonrpc":"2.0","id":1,"method":"ping","method":"not-found"}')
+printf '%s\n' "$out" | grep 'parse error' >/dev/null
+
+out=$(call '{"jsonrpc":"2.0","id":1,"method":"initialize","params":false}')
+printf '%s\n' "$out" | grep 'params must be an object or array' >/dev/null
+
 out=$(call '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"discover","arguments":{}}}')
 printf '%s\n' "$out" | grep 'record_experience' >/dev/null
 
@@ -143,6 +149,13 @@ printf '%s\n' "$out" | grep 'count.*20' >/dev/null
 printf '%s\n' "$out" | grep 'truncated.*true' >/dev/null
 if printf '%s\n' "$out" | grep 'observations' >/dev/null; then exit 1; fi
 
+out=$(call '{"jsonrpc":"2.0","id":481,"method":"tools/call","params":{"name":"recommend_action","arguments":{"task":"bounded","limit":"1"}}}')
+printf '%s\n' "$out" | grep 'positive integer argument' >/dev/null
+out=$(call '{"jsonrpc":"2.0","id":482,"method":"tools/call","params":{"name":"recommend_action","arguments":{"task":"bounded","limit":0}}}')
+printf '%s\n' "$out" | grep 'positive integer argument' >/dev/null
+out=$(call '{"jsonrpc":"2.0","id":483,"method":"tools/call","params":{"name":"recommend_action","arguments":{"task":"bounded","scope":{"unknown":"field"}}}}')
+printf '%s\n' "$out" | grep 'scope contains unknown field' >/dev/null
+
 out=$(call '{"jsonrpc":"2.0","id":45,"method":"resources/read","params":{"uri":"owlgrowth://guidance"}}')
 printf '%s\n' "$out" | grep 'more adaptation' >/dev/null
 
@@ -168,6 +181,10 @@ long_result=$(awk 'BEGIN { for (i = 1; i <= 10000; i++) printf "x" }')
 out=$(call "{\"jsonrpc\":\"2.0\",\"id\":473,\"method\":\"tools/call\",\"params\":{\"name\":\"observe_adaptation\",\"arguments\":{\"adaptation_id\":\"adapt-lockfile\",\"project\":\"project-a\",\"task\":\"dependency debugging\",\"ecosystem\":\"node\",\"result\":\"$long_result\",\"evidence\":\"bounded result\"}}}")
 if [ "$(printf '%s\n' "$out" | wc -c)" -gt 3000 ]; then exit 1; fi
 
+oversized_request=$(awk 'BEGIN { for (i = 1; i <= 66000; i++) printf "x" }')
+out=$(call "{\"jsonrpc\":\"2.0\",\"id\":474,\"method\":\"ping\",\"params\":{\"padding\":\"$oversized_request\"}}")
+printf '%s\n' "$out" | grep 'request exceeds 65536 characters' >/dev/null
+
 n=1
 while [ "$n" -le 21 ]; do
     call "{\"jsonrpc\":\"2.0\",\"id\":$((n + 48)),\"method\":\"tools/call\",\"params\":{\"name\":\"record_experience\",\"arguments\":{\"experience_id\":\"bounded-exp-$n\",\"project\":\"project-a\",\"task\":\"bounded experience\",\"action\":\"run $n\",\"outcome\":{\"result\":\"success\"},\"evidence\":\"exit $n\"}}}" >/dev/null
@@ -187,6 +204,26 @@ mkdir -p "$partial_data"
 printf '%s' '{"id":"partial-experience"' > "$partial_data/experiences.jsonl"
 out=$(call_data "$partial_data" '{"jsonrpc":"2.0","id":474,"method":"tools/call","params":{"name":"find_experiences","arguments":{}}}')
 printf '%s\n' "$out" | grep 'count.*0' >/dev/null
+
+reload_data="$tmp/reload-data"
+mkdir -p "$reload_data"
+printf '%s\n' '{"id":"reload-exp","kind":"experience","project":"reload-project","task":"reload","action":"validated action","outcome":"success","evidence":"observed"}' > "$reload_data/experiences.jsonl"
+printf '%s\n' '{"id":"reload-good","kind":"adaptation","guidance":"reload guidance","scope":{"task":"reload"},"source_experience_ids":["reload-exp"],"evidence":{"success":0,"failure":0,"other":0,"observations":[]},"status":"active"}' > "$reload_data/adaptations.jsonl"
+printf '%s\n' '{"id":"reload-unknown","kind":"adaptation","guidance":"must be ignored","scope":{"task":"reload"},"source_experience_ids":["missing"],"evidence":{"success":0,"failure":0,"other":0,"observations":[]},"status":"active"}' >> "$reload_data/adaptations.jsonl"
+printf '%s\n' '{"id":"reload-duplicate","kind":"adaptation","guidance":"must be ignored","scope":{"task":"reload"},"source_experience_ids":["reload-exp","reload-exp"],"evidence":{"success":0,"failure":0,"other":0,"observations":[]},"status":"active"}' >> "$reload_data/adaptations.jsonl"
+printf '%s\n' '{"id":"reload-unknown-scope","kind":"adaptation","guidance":"must be ignored","scope":{"task":"reload","unknown":"field"},"source_experience_ids":["reload-exp"],"evidence":{"success":0,"failure":0,"other":0,"observations":[]},"status":"active"}' >> "$reload_data/adaptations.jsonl"
+printf '%s\n' '{"id":"reload-duplicate-key","id":"reload-duplicate-key","kind":"adaptation","guidance":"must be ignored","scope":{"task":"reload"},"source_experience_ids":["reload-exp"],"evidence":{"success":0,"failure":0,"other":0,"observations":[]},"status":"active"}' >> "$reload_data/adaptations.jsonl"
+out=$(call_data "$reload_data" '{"jsonrpc":"2.0","id":475,"method":"tools/call","params":{"name":"recommend_action","arguments":{"task":"reload"}}}')
+printf '%s\n' "$out" | grep 'count.*1' >/dev/null
+printf '%s\n' "$out" | grep 'reload-good' >/dev/null
+if printf '%s\n' "$out" | grep 'reload-unknown\|reload-duplicate\|reload-unknown-scope\|reload-duplicate-key' >/dev/null; then exit 1; fi
+
+malformed_lock_data="$tmp/malformed-lock-data"
+mkdir -p "$malformed_lock_data"
+printf '%s\n' 'not-a-pid' > "$malformed_lock_data/.owlgrowth.lock"
+out=$(call_data "$malformed_lock_data" '{"jsonrpc":"2.0","id":476,"method":"ping"}')
+printf '%s\n' "$out" | grep '"result":{}' >/dev/null
+[ ! -e "$malformed_lock_data/.owlgrowth.lock" ]
 
 concurrent_data="$tmp/concurrent-data"
 n=1
