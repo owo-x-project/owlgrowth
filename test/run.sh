@@ -85,6 +85,11 @@ out=$(call '{"jsonrpc":"2.0","id":44,"method":"tools/call","params":{"name":"rec
 printf '%s\n' "$out" | grep 'truncated.*true' >/dev/null
 printf '%s\n' "$out" | grep 'bounded-1' >/dev/null
 
+out=$(call '{"jsonrpc":"2.0","id":48,"method":"tools/call","params":{"name":"recommend_action","arguments":{"task":"bounded","limit":999999}}}')
+printf '%s\n' "$out" | grep 'count.*20' >/dev/null
+printf '%s\n' "$out" | grep 'truncated.*true' >/dev/null
+if printf '%s\n' "$out" | grep 'observations' >/dev/null; then exit 1; fi
+
 out=$(call '{"jsonrpc":"2.0","id":45,"method":"resources/read","params":{"uri":"owlgrowth://guidance"}}')
 printf '%s\n' "$out" | grep 'more adaptation' >/dev/null
 
@@ -93,6 +98,15 @@ printf '%s\n' "$out" | grep 'requires .*evidence' >/dev/null
 
 out=$(call '{"jsonrpc":"2.0","id":47,"method":"tools/call","params":{"name":"record_experience","arguments":{"task":"empty evidence","action":"did something","outcome":"unknown","evidence":""}}}')
 printf '%s\n' "$out" | grep 'non-empty argument' >/dev/null
+
+n=1
+while [ "$n" -le 21 ]; do
+    call "{\"jsonrpc\":\"2.0\",\"id\":$((n + 48)),\"method\":\"tools/call\",\"params\":{\"name\":\"record_experience\",\"arguments\":{\"experience_id\":\"bounded-exp-$n\",\"project\":\"project-a\",\"task\":\"bounded experience\",\"action\":\"run $n\",\"outcome\":{\"result\":\"success\"},\"evidence\":\"exit $n\"}}}}" >/dev/null
+    n=$((n + 1))
+done
+out=$(call '{"jsonrpc":"2.0","id":70,"method":"tools/call","params":{"name":"find_experiences","arguments":{"query":"bounded experience","limit":999999}}}')
+printf '%s\n' "$out" | grep 'count.*20' >/dev/null
+printf '%s\n' "$out" | grep 'truncated.*true' >/dev/null
 
 if grep 'adapt-orphan' "$tmp/data/adaptations.jsonl" >/dev/null; then exit 1; fi
 if grep 'adapt-self-rated' "$tmp/data/adaptations.jsonl" >/dev/null; then exit 1; fi

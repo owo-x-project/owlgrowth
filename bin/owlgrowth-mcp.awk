@@ -5,6 +5,7 @@ BEGIN {
     exp_file = data_dir "/experiences.jsonl"
     adapt_file = data_dir "/adaptations.jsonl"
     sequence = 0
+    MAX_CONTEXT_ITEMS = 20
     load_experiences()
     load_adaptations()
 }
@@ -192,6 +193,15 @@ function optional_string(obj, name, default_value) {
     return default_value
 }
 
+function bounded_limit(obj, name, default_value, raw, value) {
+    object_get(obj, name)
+    value = default_value
+    if (GET_PRESENT && GET_RAW ~ /^[0-9]+$/) value = GET_RAW + 0
+    if (value < 1) value = 1
+    if (value > MAX_CONTEXT_ITEMS) value = MAX_CONTEXT_ITEMS
+    return value
+}
+
 function required_raw(obj, name, label) {
     object_get(obj, name)
     if (!GET_PRESENT || GET_RAW == "null") return fail(label " requires argument '" name "'")
@@ -200,6 +210,34 @@ function required_raw(obj, name, label) {
 
 function meaningful_raw(raw) {
     return raw != "" && raw != "null" && raw != "\"\"" && raw != "{}" && raw != "[]"
+}
+
+function array_item_count(raw, i, start, e, count) {
+    count = 0; i = ws(raw, 2)
+    if (substr(raw, i, 1) == "]") return 0
+    while (i <= length(raw)) {
+        start = ws(raw, i); e = value_end(raw, start)
+        if (e < start) return count
+        count++; i = ws(raw, e + 1)
+        if (substr(raw, i, 1) == ",") i = ws(raw, i + 1)
+        else break
+    }
+    return count
+}
+
+function observation_count(raw, observations) {
+    object_get(raw, "observations")
+    if (!GET_PRESENT || substr(GET_RAW, 1, 1) != "[") return 0
+    return array_item_count(GET_RAW)
+}
+
+function evidence_summary(raw, success, failure, other, observations) {
+    success = count_evidence(raw, "success"); failure = count_evidence(raw, "failure"); other = count_evidence(raw, "other"); observations = observation_count(raw)
+    return "{\"success\":" success ",\"failure\":" failure ",\"other\":" other ",\"observation_count\":" observations "}"
+}
+
+function adaptation_summary(id) {
+    return "{\"id\":" json_escape(id) ",\"kind\":\"adaptation\",\"guidance\":" json_escape(adapt_guidance[id]) ",\"scope\":" adapt_scope[id] ",\"source_experience_count\":" array_item_count(adapt_sources[id]) ",\"evidence\":" evidence_summary(adapt_evidence[id]) ",\"status\":" json_escape(adapt_status[id]) "}"
 }
 
 function required_meaningful_raw(obj, name, label) {
@@ -257,12 +295,12 @@ function tool_text(message, is_error) {
 function tools_json() {
     return "{\"tools\":[" \
       "{\"name\":\"discover\",\"description\":\"Explain when to use OwlGrowth and route the small public surface. Read-only.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{}}}," \
-      "{\"name\":\"find_experiences\",\"description\":\"Find observed task/action/outcome records. Never turns an interpretation into an experience.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"query\":{\"type\":\"string\"},\"project\":{\"type\":\"string\"},\"limit\":{\"type\":\"integer\"}}}}," \
+      "{\"name\":\"find_experiences\",\"description\":\"Find observed task/action/outcome records. Never turns an interpretation into an experience. Results are hard-capped at 20.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"query\":{\"type\":\"string\"},\"project\":{\"type\":\"string\"},\"limit\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":20}}}}," \
       "{\"name\":\"record_experience\",\"description\":\"Append one observed Task/Action/Outcome/Evidence event. Evidence is required.\",\"inputSchema\":{\"type\":\"object\",\"required\":[\"task\",\"action\",\"outcome\",\"evidence\"],\"properties\":{\"task\":{\"type\":\"string\"},\"action\":{\"type\":\"string\"},\"outcome\":{},\"evidence\":{},\"project\":{\"type\":\"string\"},\"occurred_at\":{\"type\":\"string\"},\"experience_id\":{\"type\":\"string\"}}}}," \
       "{\"name\":\"record_adaptation\",\"description\":\"Record scoped action guidance separately from experiences; at least one existing experience must support it.\",\"inputSchema\":{\"type\":\"object\",\"required\":[\"guidance\",\"scope\",\"source_experience_ids\"],\"properties\":{\"guidance\":{\"type\":\"string\"},\"scope\":{},\"source_experience_ids\":{\"type\":\"array\",\"minItems\":1},\"adaptation_id\":{\"type\":\"string\"}}}}," \
       "{\"name\":\"revise_adaptation\",\"description\":\"Revise guidance or narrow its scope while preserving its observed evidence and history.\",\"inputSchema\":{\"type\":\"object\",\"required\":[\"adaptation_id\",\"guidance\",\"scope\",\"reason\"],\"properties\":{\"adaptation_id\":{\"type\":\"string\"},\"guidance\":{\"type\":\"string\"},\"scope\":{},\"reason\":{\"type\":\"string\"},\"source_experience_ids\":{\"type\":\"array\"}}}}," \
       "{\"name\":\"observe_adaptation\",\"description\":\"Evaluate guidance with an externally observable outcome and append the observation.\",\"inputSchema\":{\"type\":\"object\",\"required\":[\"adaptation_id\",\"result\",\"evidence\"],\"properties\":{\"adaptation_id\":{\"type\":\"string\"},\"result\":{\"type\":\"string\"},\"evidence\":{},\"project\":{\"type\":\"string\"},\"task\":{\"type\":\"string\"},\"observed_at\":{\"type\":\"string\"}}}}," \
-      "{\"name\":\"recommend_action\",\"description\":\"Return up to a bounded number of active scoped adaptations that may improve the next action.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"task\":{\"type\":\"string\"},\"scope\":{},\"project\":{\"type\":\"string\"},\"limit\":{\"type\":\"integer\",\"minimum\":1}}}}," \
+      "{\"name\":\"recommend_action\",\"description\":\"Return up to a bounded number of active scoped adaptations that may improve the next action. Results are hard-capped at 20 and include evidence counts, not full history.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"task\":{\"type\":\"string\"},\"scope\":{},\"project\":{\"type\":\"string\"},\"limit\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":20}}}}," \
       "{\"name\":\"review_adaptation\",\"description\":\"Summarize external evidence and recommend strengthen, refine/narrow, or gather-more.\",\"inputSchema\":{\"type\":\"object\",\"required\":[\"adaptation_id\"],\"properties\":{\"adaptation_id\":{\"type\":\"string\"}}}}," \
       "{\"name\":\"retire_adaptation\",\"description\":\"Stop recommending an adaptation while preserving its history.\",\"inputSchema\":{\"type\":\"object\",\"required\":[\"adaptation_id\"],\"properties\":{\"adaptation_id\":{\"type\":\"string\"}}}}]}"
 }
@@ -308,7 +346,7 @@ function guidance_text(id, out) {
     while ((id = next_active_adaptation(guidance_used)) != "") {
         guidance_used[id] = 1
         guidance_count++
-        if (guidance_count <= 20) out = out "- [" id "] " adapt_guidance[id] " | scope=" adapt_scope[id] " | evidence=" adapt_evidence[id] "\n"
+        if (guidance_count <= MAX_CONTEXT_ITEMS) out = out "- [" id "] " adapt_guidance[id] " | scope=" adapt_scope[id] " | evidence=" evidence_summary(adapt_evidence[id]) "\n"
         else omitted_count++
     }
     if (guidance_count == 0) out = out "No active adaptation has been recorded."
@@ -406,7 +444,7 @@ function observe_adaptation(args, id, result, evidence, project, task, observed,
     observation = observation "}"; observations = append_array(observations, observation)
     record = "{\"id\":" json_escape(id) ",\"kind\":\"adaptation\",\"guidance\":" json_escape(adapt_guidance[id]) ",\"scope\":" adapt_scope[id] ",\"source_experience_ids\":" adapt_sources[id] ",\"evidence\":{\"success\":" success ",\"failure\":" failure ",\"other\":" other ",\"observations\":" observations "},\"status\":" json_escape(adapt_status[id]) "}"
     append_record(adapt_file, record); adapt_json[id] = record; adapt_evidence[id] = "{\"success\":" success ",\"failure\":" failure ",\"other\":" other ",\"observations\":" observations "}"
-    tool_text("Observed " result " for adaptation " id ". External evidence was appended.\n" record)
+    tool_text("Observed " result " for adaptation " id ". External evidence was appended.\n" adaptation_summary(id))
 }
 
 function observation_scope_allows(scope_raw, project, task, scoped_project, scoped_task) {
@@ -446,21 +484,22 @@ function match_scope(scope_raw, query_raw, query_text, project, field, requested
     return 1
 }
 
-function find_experiences(args, query, project, limit, id, count, list) {
-    query = optional_string(args, "query", ""); project = optional_string(args, "project", ""); object_get(args, "limit"); limit = (GET_PRESENT && GET_RAW ~ /^[0-9]+$/ ? GET_RAW + 0 : 20); if (limit < 1) limit = 1
+function find_experiences(args, query, project, limit, id, count, list, truncated) {
+    query = optional_string(args, "query", ""); project = optional_string(args, "project", ""); limit = bounded_limit(args, "limit", MAX_CONTEXT_ITEMS)
     for (id in experience_used) delete experience_used[id]
     list = "["; count = 0
     while (count < limit && (id = next_experience(experience_used, query, project)) != "") { experience_used[id] = 1; if (count > 0) list = list ","; list = list exp_json[id]; count++ }
-    tool_text("{\"count\":" count ",\"experiences\":" list "]}")
+    truncated = (next_experience(experience_used, query, project) != "")
+    tool_text("{\"count\":" count ",\"truncated\":" (truncated ? "true" : "false") ",\"experiences\":" list "]}")
 }
 
 function recommend_action(args, task, project, scope_raw, id, count, list, limit, truncated) {
     task = optional_string(args, "task", ""); project = optional_string(args, "project", ""); object_get(args, "scope"); scope_raw = (GET_PRESENT ? GET_RAW : "")
-    object_get(args, "limit"); limit = (GET_PRESENT && GET_RAW ~ /^[0-9]+$/ ? GET_RAW + 0 : 20); if (limit < 1) limit = 1
+    limit = bounded_limit(args, "limit", MAX_CONTEXT_ITEMS)
     split("project ecosystem task", scope_fields, " ")
     for (id in recommendation_used) delete recommendation_used[id]
     list = "["; count = 0; truncated = 0
-    while (count < limit && (id = next_matching_adaptation(recommendation_used, task, project, scope_raw)) != "") { recommendation_used[id] = 1; if (count > 0) list = list ","; list = list adapt_json[id]; count++ }
+    while (count < limit && (id = next_matching_adaptation(recommendation_used, task, project, scope_raw)) != "") { recommendation_used[id] = 1; if (count > 0) list = list ","; list = list adaptation_summary(id); count++ }
     if (next_matching_adaptation(recommendation_used, task, project, scope_raw) != "") truncated = 1
     tool_text("{\"count\":" count ",\"truncated\":" (truncated ? "true" : "false") ",\"task\":" json_escape(task) ",\"project\":" json_escape(project) ",\"adaptations\":" list "]}")
 }
@@ -473,7 +512,7 @@ function review_adaptation(args, id, e, success, failure, other, recommendation)
     else if (failure > success) recommendation = "refine-or-narrow"
     else if (success > failure) recommendation = "strengthen"
     else recommendation = "gather-more"
-    tool_text("{\"adaptation\":" adapt_json[id] ",\"recommendation\":" json_escape(recommendation) ",\"reason\":\"Based on externally observed success/failure counts; self-assessment is not counted.\"}")
+    tool_text("{\"adaptation\":" adaptation_summary(id) ",\"recommendation\":" json_escape(recommendation) ",\"reason\":\"Based on externally observed success/failure counts; self-assessment is not counted.\"}")
 }
 
 function retire_adaptation(args, id, record) {
@@ -482,5 +521,5 @@ function retire_adaptation(args, id, record) {
     if (adapt_status[id] == "retired") { fail("adaptation is already retired: " id); return }
     record = "{\"id\":" json_escape(id) ",\"kind\":\"adaptation\",\"guidance\":" json_escape(adapt_guidance[id]) ",\"scope\":" adapt_scope[id] ",\"source_experience_ids\":" adapt_sources[id] ",\"evidence\":" adapt_evidence[id] ",\"status\":\"retired\"}"
     append_record(adapt_file, record); adapt_json[id] = record; adapt_status[id] = "retired"
-    tool_text("Retired adaptation " id "; its evidence and history remain available.\n" record)
+    tool_text("Retired adaptation " id "; its evidence and history remain available.\n" adaptation_summary(id))
 }
