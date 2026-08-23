@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "embedded",
+  "dolt_database": "owlgrowth",
+  "project_id": "caa5055f-53da-4cb6-aa2e-e6024d6dcdd7"
+}
