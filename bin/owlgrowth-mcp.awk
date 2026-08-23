@@ -12,6 +12,7 @@ BEGIN {
     MAX_RESPONSE_TEXT = 32768
     REQUEST_NOTIFICATION = 0
     SHUTDOWN_REQUESTED = 0
+    for (byte_index = 0; byte_index <= 255; byte_index++) UTF8_BYTE[sprintf("%c", byte_index)] = byte_index
     load_experiences()
     load_adaptations()
 }
@@ -146,7 +147,41 @@ function hex_value(s, i, c, p, n) {
     return n
 }
 
+function utf8_sanitize(value, out, i, c, byte, need, first_min, first_max, sequence_end, j, next_byte, valid) {
+    out = ""
+    i = 1
+    while (i <= length(value)) {
+        c = substr(value, i, 1)
+        if (c in UTF8_BYTE) byte = UTF8_BYTE[c]; else byte = -1
+        need = 0
+        first_min = 128
+        first_max = 191
+        if (byte < 128) { out = out c; i++; continue }
+        if (byte >= 194 && byte <= 223) need = 1
+        else if (byte >= 224 && byte <= 239) {
+            need = 2
+            if (byte == 224) first_min = 160
+            if (byte == 237) first_max = 159
+        } else if (byte >= 240 && byte <= 244) {
+            need = 3
+            if (byte == 240) first_min = 144
+            if (byte == 244) first_max = 143
+        } else { out = out "\357\277\275"; i++; continue }
+        sequence_end = i + need; valid = 1
+        for (j = i + 1; j <= sequence_end; j++) {
+            c = substr(value, j, 1)
+            if (c in UTF8_BYTE) next_byte = UTF8_BYTE[c]; else next_byte = -1
+            if (next_byte < first_min || next_byte > first_max) { valid = 0; break }
+            first_min = 128; first_max = 191
+        }
+        if (valid) { out = out substr(value, i, need + 1); i = sequence_end + 1 }
+        else { out = out "\357\277\275"; i++ }
+    }
+    return out
+}
+
 function json_escape(s, i, c, out) {
+    s = utf8_sanitize(s)
     out = "\""
     for (i = 1; i <= length(s); i++) {
         c = substr(s, i, 1)
@@ -160,6 +195,42 @@ function json_escape(s, i, c, out) {
         else out = out c
     }
     return out "\""
+}
+
+function utf8_safe_prefix(value, limit, out, i, c, byte, need, start, first_min, first_max) {
+    out = substr(value, 1, limit)
+    need = 0
+    start = 1
+    first_min = 128
+    first_max = 191
+    for (i = 1; i <= length(out); i++) {
+        c = substr(out, i, 1)
+        if (c in UTF8_BYTE) byte = UTF8_BYTE[c]; else byte = -1
+        if (need == 0) {
+            start = i
+            if (byte < 128) continue
+            if (byte >= 194 && byte <= 223) { need = 1; first_min = 128; first_max = 191; continue }
+            if (byte >= 224 && byte <= 239) {
+                need = 2; first_min = 128; first_max = 191
+                if (byte == 224) first_min = 160
+                if (byte == 237) first_max = 159
+                continue
+            }
+            if (byte >= 240 && byte <= 244) {
+                need = 3; first_min = 128; first_max = 191
+                if (byte == 240) first_min = 144
+                if (byte == 244) first_max = 143
+                continue
+            }
+            return substr(out, 1, i - 1)
+        }
+        if (byte < first_min || byte > first_max) return substr(out, 1, start - 1)
+        need--
+        first_min = 128
+        first_max = 191
+    }
+    if (need != 0) return substr(out, 1, start - 1)
+    return out
 }
 
 function json_skip_ws(s) { while (JSON_POS <= length(s) && substr(s, JSON_POS, 1) ~ /[[:space:]]/) JSON_POS++ }
@@ -258,15 +329,15 @@ function raw_kind(raw, i, c) {
 }
 
 function bounded_raw(raw) {
-    if (length(raw) <= MAX_CONTEXT_TEXT) return raw
+    if (length(raw) <= MAX_CONTEXT_TEXT) return utf8_sanitize(raw)
     return "{\"kind\":" json_escape(raw_kind(raw)) ",\"bytes\":" length(raw) ",\"truncated\":true}"
 }
 
-function bounded_json_string(value) { return json_escape(substr(value, 1, MAX_CONTEXT_TEXT)) }
+function bounded_json_string(value) { return json_escape(utf8_safe_prefix(value, MAX_CONTEXT_TEXT)) }
 
 function bounded_text(value) {
     gsub(/[[:space:]]+/, " ", value)
-    return substr(value, 1, MAX_CONTEXT_TEXT)
+    return utf8_safe_prefix(value, MAX_CONTEXT_TEXT)
 }
 
 function bounded_text_field(name, value, out) {
@@ -293,7 +364,7 @@ function bounded_string_array(raw, i, start, e, count, item, value, list) {
             item = substr(raw, start, e - start + 1)
             if (substr(item, 1, 1) == "\"") {
                 value = json_decode(item)
-                if (length(value) > MAX_CONTEXT_TEXT) value = substr(value, 1, MAX_CONTEXT_TEXT)
+                if (length(value) > MAX_CONTEXT_TEXT) value = utf8_safe_prefix(value, MAX_CONTEXT_TEXT)
                 item = json_escape(value)
             } else item = bounded_raw(item)
             if (ARRAY_COUNT > 1) list = list ","
@@ -652,7 +723,7 @@ function validate_experience_ids(raw, label, i, start, e, item) {
 }
 
 function handle_request(line, method, id_present, params) {
-    REQUEST_NOTIFICATION = 0
+    REQUEST_NOTIFICATION = (line !~ /"id"[[:space:]]*:/)
     if (length(line) > MAX_REQUEST_TEXT) { ID_RAW = "null"; rpc_error(-32600, "request exceeds " MAX_REQUEST_TEXT " characters"); return }
     if (!valid_json(line)) { ID_RAW = "null"; rpc_error(-32700, "parse error"); return }
     object_get(line, "id"); REQUEST_NOTIFICATION = !GET_PRESENT

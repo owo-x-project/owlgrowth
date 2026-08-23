@@ -19,6 +19,9 @@ printf '%s\n' "$out" | grep '"protocolVersion":"2024-11-05"' >/dev/null
 out=$(call '{"jsonrpc":"2.0","method":"ping"}')
 [ -z "$out" ]
 
+out=$(printf '%s\n' '{"jsonrpc":"2.0","method":' | OWL_GROWTH_DATA_DIR="$tmp/malformed-notification-data" "$root/bin/owlgrowth-mcp")
+[ -z "$out" ]
+
 out=$(printf '%s\n' '{"jsonrpc":"1.0","method":"ping"}' '{"jsonrpc":"2.0","method":"ping"}' | OWL_GROWTH_DATA_DIR="$tmp/notification-data" "$root/bin/owlgrowth-mcp")
 [ -z "$out" ]
 
@@ -205,6 +208,15 @@ if [ "$(printf '%s\n' "$out" | grep -o 'outcome_truncated' | wc -l)" -ne 1 ]; th
 if [ "$(printf '%s\n' "$out" | grep -o 'evidence_truncated' | wc -l)" -ne 1 ]; then exit 1; fi
 if [ "$(printf '%s\n' "$out" | wc -c)" -gt 3000 ]; then exit 1; fi
 grep 'bounded-text' "$tmp/data/experiences.jsonl" >/dev/null
+
+utf8_text=$(awk 'BEGIN { for (i = 1; i <= 171; i++) printf "\342\202\254" }')
+out=$(call "{\"jsonrpc\":\"2.0\",\"id\":4721,\"method\":\"tools/call\",\"params\":{\"name\":\"record_experience\",\"arguments\":{\"experience_id\":\"utf8-boundary\",\"task\":\"utf8 boundary\",\"action\":\"$utf8_text\",\"outcome\":\"success\",\"evidence\":\"boundary regression\"}}}")
+printf '%s\n' "$out" | grep 'action_truncated.*true' >/dev/null
+printf '%s\n' "$out" | iconv -f UTF-8 -t UTF-8 >/dev/null
+
+out=$(printf '%b\n' '{"jsonrpc":"2.0","id":4722,"method":"tools/call","params":{"name":"record_experience","arguments":{"experience_id":"bad-\377","task":"invalid utf8","action":"record","outcome":"success","evidence":"sanitized"}}}' | OWL_GROWTH_DATA_DIR="$tmp/invalid-utf8-data" "$root/bin/owlgrowth-mcp")
+printf '%s\n' "$out" | iconv -f UTF-8 -t UTF-8 >/dev/null
+iconv -f UTF-8 -t UTF-8 "$tmp/invalid-utf8-data/experiences.jsonl" >/dev/null
 
 long_result=$(awk 'BEGIN { for (i = 1; i <= 10000; i++) printf "x" }')
 out=$(call "{\"jsonrpc\":\"2.0\",\"id\":473,\"method\":\"tools/call\",\"params\":{\"name\":\"observe_adaptation\",\"arguments\":{\"adaptation_id\":\"adapt-lockfile\",\"project\":\"project-a\",\"task\":\"dependency debugging\",\"ecosystem\":\"node\",\"result\":\"$long_result\",\"evidence\":\"bounded result\"}}}")

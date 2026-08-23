@@ -27,6 +27,10 @@ The server rejects malformed JSON-RPC request lines, duplicate JSON object keys,
 
 Use `discover` first when routing is unclear. The tools are deliberately narrow: find/record experiences, record/observe/review/revise/retire adaptations, and recommend the next action. The `owlgrowth://guidance` resource is bounded to avoid context growth; use `recommend_action` with task/project/scope for targeted guidance. There is no product CLI or OwlKnowledge/Owlspec integration.
 
+Public projection truncation is byte-bounded and backs off to the last complete UTF-8 code point, so a 512-byte context limit never emits an invalid UTF-8 response.
+
+Invalid UTF-8 input is normalized at JSON output and append-only persistence boundaries, and malformed request lines that carry no `id` remain response-free.
+
 ## Verification
 
 ```sh
