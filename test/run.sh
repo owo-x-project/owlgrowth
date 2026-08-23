@@ -9,6 +9,10 @@ call() {
     printf '%s\n' "$1" | OWL_GROWTH_DATA_DIR="$tmp/data" "$root/bin/owlgrowth-mcp"
 }
 
+call_data() {
+    printf '%s\n' "$2" | OWL_GROWTH_DATA_DIR="$1" "$root/bin/owlgrowth-mcp"
+}
+
 out=$(call '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}')
 printf '%s\n' "$out" | grep '"protocolVersion":"2024-11-05"' >/dev/null
 
@@ -27,16 +31,21 @@ printf '%s\n' "$out" | grep 'record_experience' >/dev/null
 out=$(call '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"record_experience","arguments":{"experience_id":"exp-a","project":"project-a","task":"dependency debugging","action":"changed package.json without checking lockfile","outcome":{"result":"failure"},"evidence":"test exit code 1"}}}')
 printf '%s\n' "$out" | grep 'exp-a' >/dev/null
 
+out=$(call '{"jsonrpc":"2.0","id":31,"method":"tools/call","params":{"name":"record_experience","arguments":{"experience_id":"emoji-\ud83d\ude00","task":"unicode","action":"record","outcome":"success","evidence":"unicode round trip"}}}')
+printf '%s\n' "$out" | grep 'emoji-' >/dev/null
+out=$(call '{"jsonrpc":"2.0","id":32,"method":"tools/call","params":{"name":"record_experience","arguments":{"experience_id":"emoji-😀","task":"unicode duplicate","action":"record","outcome":"success","evidence":"duplicate"}}}')
+printf '%s\n' "$out" | grep 'experience already exists' >/dev/null
+
 out=$(call '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"record_adaptation","arguments":{"adaptation_id":"adapt-lockfile","guidance":"check the lockfile before changing dependencies","scope":{"ecosystem":"node","task":"dependency debugging"},"source_experience_ids":["exp-a"]}}}')
 printf '%s\n' "$out" | grep 'adapt-lockfile' >/dev/null
 
-out=$(call '{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"observe_adaptation","arguments":{"adaptation_id":"adapt-lockfile","project":"project-a","task":"dependency debugging","result":"success","evidence":"test exit code 0"}}}')
+out=$(call '{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"observe_adaptation","arguments":{"adaptation_id":"adapt-lockfile","project":"project-a","task":"dependency debugging","ecosystem":"node","result":"success","evidence":"test exit code 0"}}}')
 printf '%s\n' "$out" | grep 'success.*1' >/dev/null
 
 out=$(call '{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"record_experience","arguments":{"experience_id":"exp-b","project":"project-b","task":"dependency debugging","action":"checked lockfile before changing dependencies","outcome":{"result":"success"},"evidence":"build exit code 0"}}}')
 printf '%s\n' "$out" | grep 'project-b' >/dev/null
 
-out=$(call '{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"observe_adaptation","arguments":{"adaptation_id":"adapt-lockfile","project":"project-b","task":"dependency debugging","result":"success","evidence":"build exit code 0"}}}')
+out=$(call '{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"observe_adaptation","arguments":{"adaptation_id":"adapt-lockfile","project":"project-b","task":"dependency debugging","ecosystem":"node","result":"success","evidence":"build exit code 0"}}}')
 printf '%s\n' "$out" | grep 'success.*2' >/dev/null
 
 out=$(call '{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"revise_adaptation","arguments":{"adaptation_id":"adapt-lockfile","guidance":"check the lockfile and compare the dependency diff first","scope":{"ecosystem":"node","task":"dependency debugging"},"source_experience_ids":["exp-a","exp-b"],"reason":"confirmed by two project outcomes"}}}')
@@ -85,7 +94,7 @@ out=$(call '{"jsonrpc":"2.0","id":21,"method":"tools/call","params":{"name":"rec
 printf '%s\n' "$out" | grep 'does not accept evidence' >/dev/null
 
 out=$(call '{"jsonrpc":"2.0","id":22,"method":"tools/call","params":{"name":"record_adaptation","arguments":{"adaptation_id":"adapt-unproven","guidance":"unproven guidance","scope":{"task":"dependency debugging"}}}}')
-printf '%s\n' "$out" | grep 'at least one source experience' >/dev/null
+printf '%s\n' "$out" | grep 'at least one experience id' >/dev/null
 
 out=$(call '{"jsonrpc":"2.0","id":23,"method":"tools/call","params":{"name":"record_adaptation","arguments":{"adaptation_id":"adapt-bad-scope","guidance":"bad scope must not be stored","scope":{"project":123},"source_experience_ids":["exp-a"]}}}')
 printf '%s\n' "$out" | grep "scope field 'project' must be a non-empty string" >/dev/null
@@ -93,6 +102,21 @@ if grep 'adapt-bad-scope' "$tmp/data/adaptations.jsonl" >/dev/null; then exit 1;
 
 out=$(call '{"jsonrpc":"2.0","id":24,"method":"tools/call","params":{"name":"recommend_action","arguments":{"scope":[]}}}')
 printf '%s\n' "$out" | grep 'requires a valid object argument' >/dev/null
+
+out=$(call '{"jsonrpc":"2.0","id":25,"method":"tools/call","params":{"name":"record_experience","arguments":{"experience_id":"bad-optional-type","project":123,"task":"t","action":"a","outcome":"o","evidence":"e"}}}')
+printf '%s\n' "$out" | grep 'requires string argument' >/dev/null
+if grep 'bad-optional-type' "$tmp/data/experiences.jsonl" >/dev/null; then exit 1; fi
+
+out=$(call '{"jsonrpc":"2.0","id":26,"method":"tools/call","params":{"name":"record_experience","arguments":{"experience_id":"bad-whitespace","task":"t","action":"a","outcome":" ","evidence":"  "}}}')
+printf '%s\n' "$out" | grep 'non-empty argument' >/dev/null
+if grep 'bad-whitespace' "$tmp/data/experiences.jsonl" >/dev/null; then exit 1; fi
+
+out=$(call '{"jsonrpc":"2.0","id":27,"method":"tools/call","params":{"name":"record_adaptation","arguments":{"adaptation_id":"duplicate-source-ids","guidance":"duplicate ids must be rejected","scope":{"task":"dependency debugging"},"source_experience_ids":["exp-a","exp-a"]}}}')
+printf '%s\n' "$out" | grep 'duplicate experience id' >/dev/null
+if grep 'duplicate-source-ids' "$tmp/data/adaptations.jsonl" >/dev/null; then exit 1; fi
+
+out=$(call '{"jsonrpc":"2.0","id":28,"method":"tools/call","params":{"name":"observe_adaptation","arguments":{"adaptation_id":"adapt-lockfile","project":"project-a","task":"dependency debugging","result":"success","evidence":"missing ecosystem"}}}')
+printf '%s\n' "$out" | grep 'requires ecosystem' >/dev/null
 
 call '{"jsonrpc":"2.0","id":80,"method":"tools/call","params":{"name":"record_adaptation","arguments":{"adaptation_id":"adapt-detail","guidance":"detail guidance","scope":{"task":"detail"},"source_experience_ids":["exp-a"]}}}' >/dev/null
 n=1
@@ -135,8 +159,14 @@ long_text=$(awk 'BEGIN { for (i = 1; i <= 6000; i++) printf "x" }')
 out=$(call "{\"jsonrpc\":\"2.0\",\"id\":472,\"method\":\"tools/call\",\"params\":{\"name\":\"record_experience\",\"arguments\":{\"experience_id\":\"bounded-text\",\"task\":\"bounded text\",\"action\":\"$long_text\",\"outcome\":{\"result\":\"$long_text\"},\"evidence\":\"$long_text\"}}}")
 printf '%s\n' "$out" | grep 'outcome_truncated.*true' >/dev/null
 printf '%s\n' "$out" | grep 'evidence_truncated.*true' >/dev/null
+if [ "$(printf '%s\n' "$out" | grep -o 'outcome_truncated' | wc -l)" -ne 1 ]; then exit 1; fi
+if [ "$(printf '%s\n' "$out" | grep -o 'evidence_truncated' | wc -l)" -ne 1 ]; then exit 1; fi
 if [ "$(printf '%s\n' "$out" | wc -c)" -gt 3000 ]; then exit 1; fi
 grep 'bounded-text' "$tmp/data/experiences.jsonl" >/dev/null
+
+long_result=$(awk 'BEGIN { for (i = 1; i <= 10000; i++) printf "x" }')
+out=$(call "{\"jsonrpc\":\"2.0\",\"id\":473,\"method\":\"tools/call\",\"params\":{\"name\":\"observe_adaptation\",\"arguments\":{\"adaptation_id\":\"adapt-lockfile\",\"project\":\"project-a\",\"task\":\"dependency debugging\",\"ecosystem\":\"node\",\"result\":\"$long_result\",\"evidence\":\"bounded result\"}}}")
+if [ "$(printf '%s\n' "$out" | wc -c)" -gt 3000 ]; then exit 1; fi
 
 n=1
 while [ "$n" -le 21 ]; do
@@ -151,5 +181,35 @@ if grep 'adapt-orphan' "$tmp/data/adaptations.jsonl" >/dev/null; then exit 1; fi
 if grep 'adapt-self-rated' "$tmp/data/adaptations.jsonl" >/dev/null; then exit 1; fi
 if grep 'adapt-unproven' "$tmp/data/adaptations.jsonl" >/dev/null; then exit 1; fi
 if grep 'empty evidence' "$tmp/data/experiences.jsonl" >/dev/null; then exit 1; fi
+
+partial_data="$tmp/partial-data"
+mkdir -p "$partial_data"
+printf '%s' '{"id":"partial-experience"' > "$partial_data/experiences.jsonl"
+out=$(call_data "$partial_data" '{"jsonrpc":"2.0","id":474,"method":"tools/call","params":{"name":"find_experiences","arguments":{}}}')
+printf '%s\n' "$out" | grep 'count.*0' >/dev/null
+
+concurrent_data="$tmp/concurrent-data"
+n=1
+while [ "$n" -le 4 ]; do
+    printf '%s\n' '{"jsonrpc":"2.0","id":475,"method":"tools/call","params":{"name":"record_experience","arguments":{"task":"concurrent","action":"write","outcome":"success","evidence":"process"}}}' |
+        OWL_GROWTH_DATA_DIR="$concurrent_data" "$root/bin/owlgrowth-mcp" > "$tmp/concurrent-$n.out" &
+    n=$((n + 1))
+done
+wait
+out=$(call_data "$concurrent_data" '{"jsonrpc":"2.0","id":476,"method":"tools/call","params":{"name":"find_experiences","arguments":{"query":"concurrent","limit":20}}}')
+printf '%s\n' "$out" | grep 'count.*4' >/dev/null
+
+observation_data="$tmp/concurrent-observations"
+call_data "$observation_data" '{"jsonrpc":"2.0","id":477,"method":"tools/call","params":{"name":"record_experience","arguments":{"experience_id":"concurrent-exp","task":"concurrent observations","action":"seed","outcome":"success","evidence":"seed"}}}' >/dev/null
+call_data "$observation_data" '{"jsonrpc":"2.0","id":478,"method":"tools/call","params":{"name":"record_adaptation","arguments":{"adaptation_id":"concurrent-adaptation","guidance":"observe safely","scope":{"task":"concurrent observations"},"source_experience_ids":["concurrent-exp"]}}}' >/dev/null
+n=1
+while [ "$n" -le 4 ]; do
+    printf '%s\n' '{"jsonrpc":"2.0","id":479,"method":"tools/call","params":{"name":"observe_adaptation","arguments":{"adaptation_id":"concurrent-adaptation","project":"current","task":"concurrent observations","result":"success","evidence":"parallel"}}}' |
+        OWL_GROWTH_DATA_DIR="$observation_data" "$root/bin/owlgrowth-mcp" > "$tmp/observation-$n.out" &
+    n=$((n + 1))
+done
+wait
+out=$(call_data "$observation_data" '{"jsonrpc":"2.0","id":480,"method":"tools/call","params":{"name":"review_adaptation","arguments":{"adaptation_id":"concurrent-adaptation"}}}')
+printf '%s\n' "$out" | grep 'success.*4' >/dev/null
 
 printf '%s\n' 'OwlGrowth tests passed.'

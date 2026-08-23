@@ -91,7 +91,7 @@ function object_get(obj, wanted, i, e, k_end, key, start, c) {
     return 0
 }
 
-function json_decode(s, i, c, out, hex, n) {
+function json_decode(s, i, c, out, hex, n, low_hex, low) {
     out = ""; i = 2
     while (i < length(s)) {
         c = substr(s, i, 1)
@@ -104,9 +104,18 @@ function json_decode(s, i, c, out, hex, n) {
             else if (c == "f") out = out "\f"
             else if (c == "u" && i + 4 < length(s)) {
                 hex = substr(s, i + 1, 4); n = hex_value(hex)
-                if (n >= 32 && n < 127) out = out sprintf("%c", n)
-                else out = out "\\u" hex
-                i += 4
+                if (n >= 55296 && n <= 56319 && substr(s, i + 5, 2) == "\\u") {
+                    low_hex = substr(s, i + 7, 4); low = hex_value(low_hex)
+                    if (low >= 56320 && low <= 57343) { n = 65536 + (n - 55296) * 1024 + low - 56320; out = out sprintf("%c", n); i += 10 }
+                    else { out = out "\\u" hex; i += 4 }
+                } else if (n >= 55296 && n <= 57343) { out = out "\\u" hex; i += 4 }
+                else if (n == 8) { out = out "\b"; i += 4 }
+                else if (n == 9) { out = out "\t"; i += 4 }
+                else if (n == 10) { out = out "\n"; i += 4 }
+                else if (n == 12) { out = out "\f"; i += 4 }
+                else if (n == 13) { out = out "\r"; i += 4 }
+                else if (n < 32) { out = out "\\u" hex; i += 4 }
+                else { out = out sprintf("%c", n); i += 4 }
             } else out = out c
         } else if (c == "\"") return out
         else out = out c
@@ -283,7 +292,8 @@ function bounded_string_array(raw, i, start, e, count, item, value, list) {
 
 function load_experiences(line, id) {
     while ((getline line < exp_file) > 0) {
-        if (object_get(line, "id") && GET_PRESENT) {
+        if (valid_json(line) && persisted_experience(line)) {
+            object_get(line, "id")
             id = GET_STRING; exp_json[id] = line
             object_get(line, "project"); exp_project[id] = GET_STRING
             object_get(line, "task"); exp_task[id] = GET_STRING
@@ -300,7 +310,8 @@ function load_experiences(line, id) {
 
 function load_adaptations(line, id) {
     while ((getline line < adapt_file) > 0) {
-        if (object_get(line, "id") && GET_PRESENT) {
+        if (valid_json(line) && persisted_adaptation(line)) {
+            object_get(line, "id")
             id = GET_STRING; adapt_json[id] = line
             object_get(line, "guidance"); adapt_guidance[id] = GET_STRING
             object_get(line, "scope"); adapt_scope[id] = GET_RAW
@@ -335,9 +346,10 @@ function valid_identifier(value, label) {
     return 1
 }
 
-function optional_string(obj, name, default_value) {
+function optional_string(obj, name, default_value, label) {
     object_get(obj, name)
-    if (GET_PRESENT && substr(GET_RAW, 1, 1) == "\"") return GET_STRING
+    if (GET_PRESENT && substr(GET_RAW, 1, 1) != "\"") { fail(label " requires string argument '" name "'"); return default_value }
+    if (GET_PRESENT) return GET_STRING
     return default_value
 }
 
@@ -356,8 +368,36 @@ function required_raw(obj, name, label) {
     return GET_RAW
 }
 
-function meaningful_raw(raw) {
-    return raw != "" && raw != "null" && raw != "\"\"" && raw != "{}" && raw != "[]"
+function meaningful_raw(raw, i, first) {
+    if (raw == "" || raw == "null") return 0
+    first = substr(raw, 1, 1)
+    if (first == "\"") return json_decode(raw) !~ /^[[:space:]]*$/
+    if (first == "{") { i = ws(raw, 2); return substr(raw, i, 1) != "}" }
+    if (first == "[") { i = ws(raw, 2); return substr(raw, i, 1) != "]" }
+    return 1
+}
+
+function persisted_string(obj, name, nonempty) {
+    object_get(obj, name)
+    return GET_PRESENT && substr(GET_RAW, 1, 1) == "\"" && (!nonempty || GET_STRING !~ /^[[:space:]]*$/)
+}
+
+function persisted_kind(obj, expected) {
+    object_get(obj, "kind")
+    return GET_PRESENT && GET_RAW == json_escape(expected)
+}
+
+function persisted_json_field(obj, name, first, raw) {
+    object_get(obj, name); raw = (GET_PRESENT ? GET_RAW : "")
+    return raw != "" && valid_json(raw) && (first == "" || substr(raw, 1, 1) == first)
+}
+
+function persisted_experience(obj) {
+    return persisted_kind(obj, "experience") && persisted_string(obj, "id", 1) && persisted_string(obj, "project", 1) && persisted_string(obj, "task", 1) && persisted_string(obj, "action", 1) && persisted_json_field(obj, "outcome", "") && meaningful_raw(GET_RAW) && persisted_json_field(obj, "evidence", "") && meaningful_raw(GET_RAW)
+}
+
+function persisted_adaptation(obj) {
+    return persisted_kind(obj, "adaptation") && persisted_string(obj, "id", 1) && persisted_string(obj, "guidance", 1) && persisted_json_field(obj, "scope", "{") && persisted_json_field(obj, "source_experience_ids", "[") && persisted_json_field(obj, "evidence", "{") && persisted_string(obj, "status", 1)
 }
 
 function array_item_count(raw, i, start, e, count) {
@@ -413,8 +453,6 @@ function adaptation_summary(id, source_ids, source_count, source_truncated, out)
 
 function experience_summary(id, out) {
     out = "{\"id\":" json_escape(id) ",\"kind\":\"experience\"," bounded_text_field("project", exp_project[id]) "," bounded_text_field("task", exp_task[id]) "," bounded_text_field("action", exp_action[id]) "," bounded_raw_field("outcome", exp_outcome[id]) "," bounded_raw_field("evidence", exp_evidence[id])
-    if (length(exp_outcome[id]) > MAX_CONTEXT_TEXT) out = out ",\"outcome_truncated\":true"
-    if (length(exp_evidence[id]) > MAX_CONTEXT_TEXT) out = out ",\"evidence_truncated\":true"
     if (exp_occurred[id] != "") out = out "," bounded_text_field("occurred_at", exp_occurred[id])
     return out "}"
 }
@@ -423,8 +461,9 @@ function observation_summary(raw, out) {
     out = "{"
     object_get(raw, "project"); if (GET_PRESENT) out = out bounded_text_field("project", GET_STRING)
     object_get(raw, "result"); if (GET_PRESENT) out = out "," bounded_text_field("result", GET_STRING)
-    object_get(raw, "evidence"); if (GET_PRESENT) { out = out "," bounded_raw_field("evidence", GET_RAW); if (length(GET_RAW) > MAX_CONTEXT_TEXT) out = out ",\"evidence_truncated\":true" }
+    object_get(raw, "evidence"); if (GET_PRESENT) out = out "," bounded_raw_field("evidence", GET_RAW)
     object_get(raw, "task"); if (GET_PRESENT) out = out "," bounded_text_field("task", GET_STRING)
+    object_get(raw, "ecosystem"); if (GET_PRESENT) out = out "," bounded_text_field("ecosystem", GET_STRING)
     object_get(raw, "observed_at"); if (GET_PRESENT) out = out "," bounded_text_field("observed_at", GET_STRING)
     return out "}"
 }
@@ -455,13 +494,16 @@ function valid_scope(raw, label) {
 
 function validate_experience_ids(raw, label, i, start, e, item) {
     if (substr(raw, 1, 1) != "[" || !valid_json(raw)) return fail(label " must be a valid JSON array")
+    for (item in validated_experience_ids) delete validated_experience_ids[item]
     i = ws(raw, 2)
-    if (substr(raw, i, 1) == "]") return 1
+    if (substr(raw, i, 1) == "]") return fail(label " requires at least one experience id")
     while (i <= length(raw)) {
         start = ws(raw, i); e = value_end(raw, start)
         if (e < start || substr(raw, start, 1) != "\"") return fail(label " must contain experience id strings")
         item = json_decode(substr(raw, start, e - start + 1))
         if (item == "" || !(item in exp_json)) return fail(label " references unknown experience: " item)
+        if (item in validated_experience_ids) return fail(label " contains duplicate experience id: " item)
+        validated_experience_ids[item] = 1
         i = ws(raw, e + 1)
         if (substr(raw, i, 1) == ",") i = ws(raw, i + 1)
         else if (substr(raw, i, 1) == "]") return 1
@@ -510,7 +552,7 @@ function tools_json() {
       "{\"name\":\"record_experience\",\"description\":\"Append one observed Task/Action/Outcome/Evidence event. Evidence is required.\",\"inputSchema\":{\"type\":\"object\",\"required\":[\"task\",\"action\",\"outcome\",\"evidence\"],\"properties\":{\"task\":{\"type\":\"string\"},\"action\":{\"type\":\"string\"},\"outcome\":{},\"evidence\":{},\"project\":{\"type\":\"string\"},\"occurred_at\":{\"type\":\"string\"},\"experience_id\":{\"type\":\"string\"}}}}," \
       "{\"name\":\"record_adaptation\",\"description\":\"Record scoped action guidance separately from experiences; at least one existing experience must support it.\",\"inputSchema\":{\"type\":\"object\",\"required\":[\"guidance\",\"scope\",\"source_experience_ids\"],\"properties\":{\"guidance\":{\"type\":\"string\"},\"scope\":{},\"source_experience_ids\":{\"type\":\"array\",\"minItems\":1},\"adaptation_id\":{\"type\":\"string\"}}}}," \
       "{\"name\":\"revise_adaptation\",\"description\":\"Revise guidance or narrow its scope while preserving its observed evidence and history.\",\"inputSchema\":{\"type\":\"object\",\"required\":[\"adaptation_id\",\"guidance\",\"scope\",\"reason\"],\"properties\":{\"adaptation_id\":{\"type\":\"string\"},\"guidance\":{\"type\":\"string\"},\"scope\":{},\"reason\":{\"type\":\"string\"},\"source_experience_ids\":{\"type\":\"array\"}}}}," \
-      "{\"name\":\"observe_adaptation\",\"description\":\"Evaluate guidance with an externally observable outcome and append the observation.\",\"inputSchema\":{\"type\":\"object\",\"required\":[\"adaptation_id\",\"result\",\"evidence\"],\"properties\":{\"adaptation_id\":{\"type\":\"string\"},\"result\":{\"type\":\"string\"},\"evidence\":{},\"project\":{\"type\":\"string\"},\"task\":{\"type\":\"string\"},\"observed_at\":{\"type\":\"string\"}}}}," \
+      "{\"name\":\"observe_adaptation\",\"description\":\"Evaluate guidance with an externally observable outcome and append the observation.\",\"inputSchema\":{\"type\":\"object\",\"required\":[\"adaptation_id\",\"result\",\"evidence\"],\"properties\":{\"adaptation_id\":{\"type\":\"string\"},\"result\":{\"type\":\"string\"},\"evidence\":{},\"project\":{\"type\":\"string\"},\"task\":{\"type\":\"string\"},\"ecosystem\":{\"type\":\"string\"},\"observed_at\":{\"type\":\"string\"}}}}," \
       "{\"name\":\"recommend_action\",\"description\":\"Return up to a bounded number of active scoped adaptations that may improve the next action. Results are hard-capped at 20 and include evidence counts, not full history.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"task\":{\"type\":\"string\"},\"scope\":{},\"project\":{\"type\":\"string\"},\"limit\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":20}}}}," \
       "{\"name\":\"review_adaptation\",\"description\":\"Summarize external evidence, show up to five recent observations, and recommend strengthen, refine/narrow, or gather-more.\",\"inputSchema\":{\"type\":\"object\",\"required\":[\"adaptation_id\"],\"properties\":{\"adaptation_id\":{\"type\":\"string\"}}}}," \
       "{\"name\":\"retire_adaptation\",\"description\":\"Stop recommending an adaptation while preserving its history.\",\"inputSchema\":{\"type\":\"object\",\"required\":[\"adaptation_id\"],\"properties\":{\"adaptation_id\":{\"type\":\"string\"}}}}]}"
@@ -593,7 +635,9 @@ function record_experience(args, task, action, outcome, evidence, project, occur
     if (!required_nonempty_string(args, "action", "record_experience")) return; action = GET_STRING
     outcome = required_meaningful_raw(args, "outcome", "record_experience"); if (!outcome) return
     evidence = required_meaningful_raw(args, "evidence", "record_experience"); if (!evidence) return
-    project = optional_string(args, "project", "current"); occurred = optional_string(args, "occurred_at", ""); id = optional_string(args, "experience_id", "")
+    project = optional_string(args, "project", "current", "record_experience"); if (TOOL_ERROR != "") return
+    occurred = optional_string(args, "occurred_at", "", "record_experience"); if (TOOL_ERROR != "") return
+    id = optional_string(args, "experience_id", "", "record_experience"); if (TOOL_ERROR != "") return
     if (id != "" && !valid_identifier(id, "record_experience")) return
     if (id == "") id = next_id("exp")
     if (id in exp_json) { fail("experience already exists: " id); return }
@@ -610,11 +654,11 @@ function record_adaptation(args, guidance, scope, sources, evidence, id, record)
     if (!valid_scope(scope, "record_adaptation")) return
     object_get(args, "source_experience_ids"); sources = (GET_PRESENT ? GET_RAW : "[]")
     if (substr(sources, 1, 1) != "[") { fail("record_adaptation source_experience_ids must be an array"); return }
-    if (sources == "[]") { fail("record_adaptation requires at least one source experience"); return }
     if (!validate_experience_ids(sources, "record_adaptation source_experience_ids")) return
     object_get(args, "evidence"); if (GET_PRESENT) { fail("record_adaptation does not accept evidence; use observe_adaptation") ; return }
     evidence = "{\"success\":0,\"failure\":0,\"other\":0,\"observations\":[]}"
-    id = optional_string(args, "adaptation_id", ""); if (id == "") id = next_id("adapt")
+    id = optional_string(args, "adaptation_id", "", "record_adaptation"); if (TOOL_ERROR != "") return
+    if (id == "") id = next_id("adapt")
     if (!valid_identifier(id, "record_adaptation")) return
     if (id in adapt_json) { fail("adaptation already exists: " id); return }
     record = "{\"id\":" json_escape(id) ",\"kind\":\"adaptation\",\"guidance\":" json_escape(guidance) ",\"scope\":" scope ",\"source_experience_ids\":" sources ",\"evidence\":" evidence ",\"status\":\"active\"}"
@@ -632,7 +676,6 @@ function revise_adaptation(args, id, guidance, scope, sources, reason, record) {
     if (!required_nonempty_string(args, "reason", "revise_adaptation")) return; reason = GET_STRING
     object_get(args, "source_experience_ids"); sources = (GET_PRESENT ? GET_RAW : adapt_sources[id])
     if (substr(sources, 1, 1) != "[") { fail("revise_adaptation source_experience_ids must be an array"); return }
-    if (sources == "[]") { fail("revise_adaptation requires at least one source experience"); return }
     if (!validate_experience_ids(sources, "revise_adaptation source_experience_ids")) return
     record = "{\"id\":" json_escape(id) ",\"kind\":\"adaptation\",\"guidance\":" json_escape(guidance) ",\"scope\":" scope ",\"source_experience_ids\":" sources ",\"evidence\":" adapt_evidence[id] ",\"status\":\"active\"}"
     append_record(adapt_file, record); adapt_json[id] = record; adapt_guidance[id] = guidance; adapt_scope[id] = scope; adapt_sources[id] = sources; adapt_search[id] = tolower(guidance " " scope)
@@ -643,33 +686,40 @@ function count_evidence(raw, field) { object_get(raw, field); if (GET_PRESENT &&
 function observations_raw(raw) { object_get(raw, "observations"); if (GET_PRESENT && substr(GET_RAW, 1, 1) == "[") return GET_RAW; return "[]" }
 function append_array(array_raw, item) { if (array_raw == "[]") return "[" item "]"; return substr(array_raw, 1, length(array_raw) - 1) "," item "]" }
 
-function observe_adaptation(args, id, result, evidence, project, task, observed, old_evidence, success, failure, other, observations, observation, record) {
+function observe_adaptation(args, id, result, evidence, project, task, ecosystem, observed, old_evidence, success, failure, other, observations, observation, record) {
     if (!required_string(args, "adaptation_id", "observe_adaptation")) return; id = GET_STRING
     if (!(id in adapt_json)) { fail("unknown adaptation: " id); return }
     if (!required_nonempty_string(args, "result", "observe_adaptation")) return; result = GET_STRING
     evidence = required_meaningful_raw(args, "evidence", "observe_adaptation"); if (!evidence) return
     if (adapt_status[id] == "retired") { fail("cannot observe retired adaptation: " id); return }
-    project = optional_string(args, "project", "current"); task = optional_string(args, "task", ""); observed = optional_string(args, "observed_at", "")
-    if (!observation_scope_allows(adapt_scope[id], project, task)) return
+    project = optional_string(args, "project", "current", "observe_adaptation"); if (TOOL_ERROR != "") return
+    task = optional_string(args, "task", "", "observe_adaptation"); if (TOOL_ERROR != "") return
+    ecosystem = optional_string(args, "ecosystem", "", "observe_adaptation"); if (TOOL_ERROR != "") return
+    observed = optional_string(args, "observed_at", "", "observe_adaptation"); if (TOOL_ERROR != "") return
+    if (!observation_scope_allows(adapt_scope[id], project, task, ecosystem)) return
     old_evidence = adapt_evidence[id]; success = count_evidence(old_evidence, "success"); failure = count_evidence(old_evidence, "failure"); other = count_evidence(old_evidence, "other")
     if (tolower(result) == "success" || tolower(result) == "pass" || tolower(result) == "passed") success++
     else if (tolower(result) == "failure" || tolower(result) == "fail" || tolower(result) == "failed") failure++
     else other++
     observations = observations_raw(old_evidence); observation = "{\"project\":" json_escape(project) ",\"result\":" json_escape(result) ",\"evidence\":" evidence
     if (task != "") observation = observation ",\"task\":" json_escape(task)
+    if (ecosystem != "") observation = observation ",\"ecosystem\":" json_escape(ecosystem)
     if (observed != "") observation = observation ",\"observed_at\":" json_escape(observed)
     observation = observation "}"; observations = append_array(observations, observation)
     record = "{\"id\":" json_escape(id) ",\"kind\":\"adaptation\",\"guidance\":" json_escape(adapt_guidance[id]) ",\"scope\":" adapt_scope[id] ",\"source_experience_ids\":" adapt_sources[id] ",\"evidence\":{\"success\":" success ",\"failure\":" failure ",\"other\":" other ",\"observations\":" observations "},\"status\":" json_escape(adapt_status[id]) "}"
     append_record(adapt_file, record); adapt_json[id] = record; adapt_evidence[id] = "{\"success\":" success ",\"failure\":" failure ",\"other\":" other ",\"observations\":" observations "}"
-    tool_text("Observed " result " for adaptation " id ". External evidence was appended.\n" adaptation_summary(id))
+    tool_text("Observed " bounded_text(result) " for adaptation " id ". External evidence was appended.\n" adaptation_summary(id))
 }
 
-function observation_scope_allows(scope_raw, project, task, scoped_project, scoped_task) {
+function observation_scope_allows(scope_raw, project, task, ecosystem, scoped_project, scoped_task, scoped_ecosystem) {
     scoped_project = scope_value(scope_raw, "project")
     if (scoped_project != "" && project != scoped_project) return fail("observe_adaptation project is outside adaptation scope: " project)
     scoped_task = scope_value(scope_raw, "task")
     if (scoped_task != "" && task == "") return fail("observe_adaptation requires task for task-scoped adaptation")
     if (scoped_task != "" && index(tolower(task), tolower(scoped_task)) == 0 && index(tolower(scoped_task), tolower(task)) == 0) return fail("observe_adaptation task is outside adaptation scope: " task)
+    scoped_ecosystem = scope_value(scope_raw, "ecosystem")
+    if (scoped_ecosystem != "" && ecosystem == "") return fail("observe_adaptation requires ecosystem for ecosystem-scoped adaptation")
+    if (scoped_ecosystem != "" && ecosystem != scoped_ecosystem) return fail("observe_adaptation ecosystem is outside adaptation scope: " ecosystem)
     return 1
 }
 
@@ -702,7 +752,9 @@ function match_scope(scope_raw, query_raw, query_text, project, field, requested
 }
 
 function find_experiences(args, query, project, limit, id, count, list, truncated) {
-    query = optional_string(args, "query", ""); project = optional_string(args, "project", ""); limit = bounded_limit(args, "limit", MAX_CONTEXT_ITEMS)
+    query = optional_string(args, "query", "", "find_experiences"); if (TOOL_ERROR != "") return
+    project = optional_string(args, "project", "", "find_experiences"); if (TOOL_ERROR != "") return
+    limit = bounded_limit(args, "limit", MAX_CONTEXT_ITEMS)
     for (id in experience_used) delete experience_used[id]
     list = "["; count = 0
     while (count < limit && (id = next_experience(experience_used, query, project)) != "") { experience_used[id] = 1; if (count > 0) list = list ","; list = list experience_summary(id); count++ }
@@ -711,7 +763,9 @@ function find_experiences(args, query, project, limit, id, count, list, truncate
 }
 
 function recommend_action(args, task, project, scope_raw, id, count, list, limit, truncated) {
-    task = optional_string(args, "task", ""); project = optional_string(args, "project", ""); object_get(args, "scope"); scope_raw = (GET_PRESENT ? GET_RAW : "")
+    task = optional_string(args, "task", "", "recommend_action"); if (TOOL_ERROR != "") return
+    project = optional_string(args, "project", "", "recommend_action"); if (TOOL_ERROR != "") return
+    object_get(args, "scope"); scope_raw = (GET_PRESENT ? GET_RAW : "")
     if (scope_raw != "" && !valid_scope(scope_raw, "recommend_action")) return
     limit = bounded_limit(args, "limit", MAX_CONTEXT_ITEMS)
     split("project ecosystem task", scope_fields, " ")
