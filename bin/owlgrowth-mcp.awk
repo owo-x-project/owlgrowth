@@ -6,6 +6,8 @@ BEGIN {
     adapt_file = data_dir "/adaptations.jsonl"
     sequence = 0
     MAX_CONTEXT_ITEMS = 20
+    MAX_CONTEXT_TEXT = 512
+    MAX_IDENTIFIER_TEXT = 256
     load_experiences()
     load_adaptations()
 }
@@ -140,6 +142,137 @@ function json_escape(s, i, c, out) {
     return out "\""
 }
 
+function json_skip_ws(s) { while (JSON_POS <= length(s) && substr(s, JSON_POS, 1) ~ /[[:space:]]/) JSON_POS++ }
+
+function json_parse_string(s, c, hex, i) {
+    if (substr(s, JSON_POS, 1) != "\"") { JSON_OK = 0; return }
+    JSON_POS++
+    while (JSON_POS <= length(s)) {
+        c = substr(s, JSON_POS, 1)
+        if (c == "\"") { JSON_POS++; return }
+        if (c ~ /[[:cntrl:]]/) { JSON_OK = 0; return }
+        if (c == "\\") {
+            JSON_POS++; c = substr(s, JSON_POS, 1)
+            if (c == "u") {
+                hex = substr(s, JSON_POS + 1, 4)
+                if (length(hex) != 4 || hex !~ /^[0-9a-fA-F]{4}$/) { JSON_OK = 0; return }
+                JSON_POS += 5
+            } else if (c == "\"" || c == "\\" || c == "/" || c == "b" || c == "f" || c == "n" || c == "r" || c == "t") JSON_POS++
+            else { JSON_OK = 0; return }
+        } else JSON_POS++
+    }
+    JSON_OK = 0
+}
+
+function json_parse_number(s, fragment) {
+    fragment = substr(s, JSON_POS)
+    if (match(fragment, /^-?(0|[1-9][0-9]*)(\.[0-9]+)?([eE][+-]?[0-9]+)?/) != 1) { JSON_OK = 0; return }
+    JSON_POS += RLENGTH
+}
+
+function json_parse_array(s, c) {
+    JSON_POS++; json_skip_ws(s)
+    if (substr(s, JSON_POS, 1) == "]") { JSON_POS++; return }
+    while (JSON_OK) {
+        json_parse_value(s); if (!JSON_OK) return
+        json_skip_ws(s); c = substr(s, JSON_POS, 1)
+        if (c == "]") { JSON_POS++; return }
+        if (c != ",") { JSON_OK = 0; return }
+        JSON_POS++; json_skip_ws(s)
+    }
+}
+
+function json_parse_object(s, c) {
+    JSON_POS++; json_skip_ws(s)
+    if (substr(s, JSON_POS, 1) == "}") { JSON_POS++; return }
+    while (JSON_OK) {
+        json_parse_string(s); if (!JSON_OK) return
+        json_skip_ws(s); if (substr(s, JSON_POS, 1) != ":") { JSON_OK = 0; return }
+        JSON_POS++; json_parse_value(s); if (!JSON_OK) return
+        json_skip_ws(s); c = substr(s, JSON_POS, 1)
+        if (c == "}") { JSON_POS++; return }
+        if (c != ",") { JSON_OK = 0; return }
+        JSON_POS++; json_skip_ws(s)
+    }
+}
+
+function json_parse_value(s, c) {
+    json_skip_ws(s); c = substr(s, JSON_POS, 1)
+    if (c == "\"") json_parse_string(s)
+    else if (c == "{") json_parse_object(s)
+    else if (c == "[") json_parse_array(s)
+    else if (c == "-" || c ~ /^[0-9]$/) json_parse_number(s)
+    else if (substr(s, JSON_POS, 4) == "true") JSON_POS += 4
+    else if (substr(s, JSON_POS, 5) == "false") JSON_POS += 5
+    else if (substr(s, JSON_POS, 4) == "null") JSON_POS += 4
+    else JSON_OK = 0
+}
+
+function valid_json(s) {
+    if (s == "") return 0
+    JSON_POS = 1; JSON_OK = 1; json_parse_value(s); json_skip_ws(s)
+    return JSON_OK && JSON_POS > length(s)
+}
+
+function raw_kind(raw, i, c) {
+    i = ws(raw, 1); c = substr(raw, i, 1)
+    if (c == "{") return "object"
+    if (c == "[") return "array"
+    if (c == "\"") return "string"
+    if (c == "-" || c ~ /^[0-9]$/) return "number"
+    return "value"
+}
+
+function bounded_raw(raw) {
+    if (length(raw) <= MAX_CONTEXT_TEXT) return raw
+    return "{\"kind\":" json_escape(raw_kind(raw)) ",\"bytes\":" length(raw) ",\"truncated\":true}"
+}
+
+function bounded_json_string(value) { return json_escape(substr(value, 1, MAX_CONTEXT_TEXT)) }
+
+function bounded_text(value) {
+    gsub(/[[:space:]]+/, " ", value)
+    return substr(value, 1, MAX_CONTEXT_TEXT)
+}
+
+function bounded_text_field(name, value, out) {
+    out = json_escape(name) ":" bounded_json_string(value)
+    if (length(value) > MAX_CONTEXT_TEXT) out = out "," json_escape(name "_truncated") ":true"
+    return out
+}
+
+function bounded_raw_field(name, value, out) {
+    out = json_escape(name) ":" bounded_raw(value)
+    if (length(value) > MAX_CONTEXT_TEXT) out = out "," json_escape(name "_truncated") ":true"
+    return out
+}
+
+function bounded_string_array(raw, i, start, e, count, item, value, list) {
+    ARRAY_COUNT = 0; ARRAY_TRUNCATED = 0; list = "["
+    if (substr(raw, 1, 1) != "[" || !valid_json(raw)) return list "]"
+    i = ws(raw, 2)
+    while (i <= length(raw) && substr(raw, i, 1) != "]") {
+        start = ws(raw, i); e = value_end(raw, start)
+        if (e < start) break
+        ARRAY_COUNT++
+        if (ARRAY_COUNT <= MAX_CONTEXT_ITEMS) {
+            item = substr(raw, start, e - start + 1)
+            if (substr(item, 1, 1) == "\"") {
+                value = json_decode(item)
+                if (length(value) > MAX_CONTEXT_TEXT) value = substr(value, 1, MAX_CONTEXT_TEXT)
+                item = json_escape(value)
+            } else item = bounded_raw(item)
+            if (ARRAY_COUNT > 1) list = list ","
+            list = list item
+        }
+        i = ws(raw, e + 1)
+        if (substr(raw, i, 1) == ",") i = ws(raw, i + 1)
+        else break
+    }
+    if (ARRAY_COUNT > MAX_CONTEXT_ITEMS) ARRAY_TRUNCATED = 1
+    return list "]"
+}
+
 function load_experiences(line, id) {
     while ((getline line < exp_file) > 0) {
         if (object_get(line, "id") && GET_PRESENT) {
@@ -149,6 +282,7 @@ function load_experiences(line, id) {
             object_get(line, "action"); exp_action[id] = GET_STRING
             object_get(line, "outcome"); exp_outcome[id] = GET_RAW
             object_get(line, "evidence"); exp_evidence[id] = GET_RAW
+            object_get(line, "occurred_at"); exp_occurred[id] = GET_STRING
             exp_search[id] = tolower(exp_project[id] " " exp_task[id] " " exp_action[id] " " exp_outcome[id] " " exp_evidence[id])
             sequence++
         }
@@ -184,6 +318,12 @@ function required_string(obj, name, label) {
 function required_nonempty_string(obj, name, label) {
     if (!required_string(obj, name, label)) return 0
     if (GET_STRING ~ /^[[:space:]]*$/) return fail(label " requires a non-empty string argument '" name "'")
+    return 1
+}
+
+function valid_identifier(value, label) {
+    if (value == "") return fail(label " requires a non-empty identifier")
+    if (length(value) > MAX_IDENTIFIER_TEXT) return fail(label " identifier exceeds " MAX_IDENTIFIER_TEXT " characters")
     return 1
 }
 
@@ -252,27 +392,50 @@ function recent_observations(raw, limit, i, start, e, count, item, first, list) 
     }
     first = count - limit + 1; if (first < 1) first = 1
     list = "["
-    for (i = first; i <= count; i++) { if (i > first) list = list ","; list = list recent_items[i] }
+    for (i = first; i <= count; i++) { if (i > first) list = list ","; list = list observation_summary(recent_items[i]) }
     return "{\"items\":" list "],\"truncated\":" (count > limit ? "true" : "false") "}"
 }
 
-function adaptation_summary(id) {
-    return "{\"id\":" json_escape(id) ",\"kind\":\"adaptation\",\"guidance\":" json_escape(adapt_guidance[id]) ",\"scope\":" adapt_scope[id] ",\"source_experience_count\":" array_item_count(adapt_sources[id]) ",\"evidence\":" evidence_summary(adapt_evidence[id]) ",\"status\":" json_escape(adapt_status[id]) "}"
+function adaptation_summary(id, source_ids, source_count, source_truncated, out) {
+    source_ids = bounded_string_array(adapt_sources[id]); source_count = ARRAY_COUNT; source_truncated = ARRAY_TRUNCATED
+    out = "{\"id\":" json_escape(id) ",\"kind\":\"adaptation\"," bounded_text_field("guidance", adapt_guidance[id]) ",\"scope\":" bounded_raw(adapt_scope[id]) (length(adapt_scope[id]) > MAX_CONTEXT_TEXT ? ",\"scope_truncated\":true" : "") ",\"source_experience_ids\":" source_ids ",\"source_experience_count\":" source_count
+    if (source_truncated) out = out ",\"source_experience_ids_truncated\":true"
+    return out ",\"evidence\":" evidence_summary(adapt_evidence[id]) ",\"status\":" json_escape(adapt_status[id]) "}"
+}
+
+function experience_summary(id, out) {
+    out = "{\"id\":" json_escape(id) ",\"kind\":\"experience\"," bounded_text_field("project", exp_project[id]) "," bounded_text_field("task", exp_task[id]) "," bounded_text_field("action", exp_action[id]) "," bounded_raw_field("outcome", exp_outcome[id]) "," bounded_raw_field("evidence", exp_evidence[id])
+    if (length(exp_outcome[id]) > MAX_CONTEXT_TEXT) out = out ",\"outcome_truncated\":true"
+    if (length(exp_evidence[id]) > MAX_CONTEXT_TEXT) out = out ",\"evidence_truncated\":true"
+    if (exp_occurred[id] != "") out = out "," bounded_text_field("occurred_at", exp_occurred[id])
+    return out "}"
+}
+
+function observation_summary(raw, out) {
+    out = "{"
+    object_get(raw, "project"); if (GET_PRESENT) out = out bounded_text_field("project", GET_STRING)
+    object_get(raw, "result"); if (GET_PRESENT) out = out "," bounded_text_field("result", GET_STRING)
+    object_get(raw, "evidence"); if (GET_PRESENT) { out = out "," bounded_raw_field("evidence", GET_RAW); if (length(GET_RAW) > MAX_CONTEXT_TEXT) out = out ",\"evidence_truncated\":true" }
+    object_get(raw, "task"); if (GET_PRESENT) out = out "," bounded_text_field("task", GET_STRING)
+    object_get(raw, "observed_at"); if (GET_PRESENT) out = out "," bounded_text_field("observed_at", GET_STRING)
+    return out "}"
 }
 
 function required_meaningful_raw(obj, name, label) {
     object_get(obj, name)
     if (!GET_PRESENT || !meaningful_raw(GET_RAW)) return fail(label " requires non-empty argument '" name "'")
+    if (!valid_json(GET_RAW)) return fail(label " requires valid JSON argument '" name "'")
     return GET_RAW
 }
 
 function required_object(obj, name, label) {
     object_get(obj, name)
-    if (!GET_PRESENT || substr(GET_RAW, 1, 1) != "{") return fail(label " requires object argument '" name "'")
+    if (!GET_PRESENT || substr(GET_RAW, 1, 1) != "{" || !valid_json(GET_RAW)) return fail(label " requires a valid object argument '" name "'")
     return GET_RAW
 }
 
 function validate_experience_ids(raw, label, i, start, e, item) {
+    if (substr(raw, 1, 1) != "[" || !valid_json(raw)) return fail(label " must be a valid JSON array")
     i = ws(raw, 2)
     if (substr(raw, i, 1) == "]") return 1
     while (i <= length(raw)) {
@@ -366,7 +529,7 @@ function guidance_text(id, out) {
     while ((id = next_active_adaptation(guidance_used)) != "") {
         guidance_used[id] = 1
         guidance_count++
-        if (guidance_count <= MAX_CONTEXT_ITEMS) out = out "- [" id "] " adapt_guidance[id] " | scope=" adapt_scope[id] " | evidence=" evidence_summary(adapt_evidence[id]) "\n"
+        if (guidance_count <= MAX_CONTEXT_ITEMS) out = out "- [" id "] " bounded_text(adapt_guidance[id]) " | scope=" bounded_text(adapt_scope[id]) " | evidence=" evidence_summary(adapt_evidence[id]) "\n"
         else omitted_count++
     }
     if (guidance_count == 0) out = out "No active adaptation has been recorded."
@@ -403,13 +566,14 @@ function record_experience(args, task, action, outcome, evidence, project, occur
     outcome = required_meaningful_raw(args, "outcome", "record_experience"); if (!outcome) return
     evidence = required_meaningful_raw(args, "evidence", "record_experience"); if (!evidence) return
     project = optional_string(args, "project", "current"); occurred = optional_string(args, "occurred_at", ""); id = optional_string(args, "experience_id", "")
+    if (id != "" && !valid_identifier(id, "record_experience")) return
     if (id == "") id = next_id("exp")
     if (id in exp_json) { fail("experience already exists: " id); return }
     record = "{\"id\":" json_escape(id) ",\"kind\":\"experience\",\"project\":" json_escape(project) ",\"task\":" json_escape(task) ",\"action\":" json_escape(action) ",\"outcome\":" outcome ",\"evidence\":" evidence
     if (occurred != "") record = record ",\"occurred_at\":" json_escape(occurred)
     record = record "}"
-    append_record(exp_file, record); exp_json[id] = record; exp_project[id] = project; exp_task[id] = task; exp_action[id] = action; exp_outcome[id] = outcome; exp_evidence[id] = evidence; exp_search[id] = tolower(project " " task " " action " " outcome " " evidence)
-    tool_text("Recorded observed experience " id ".\n" record)
+    append_record(exp_file, record); exp_json[id] = record; exp_project[id] = project; exp_task[id] = task; exp_action[id] = action; exp_outcome[id] = outcome; exp_evidence[id] = evidence; exp_occurred[id] = occurred; exp_search[id] = tolower(project " " task " " action " " outcome " " evidence)
+    tool_text("Recorded observed experience " id ".\n" experience_summary(id))
 }
 
 function record_adaptation(args, guidance, scope, sources, evidence, id, record) {
@@ -422,25 +586,27 @@ function record_adaptation(args, guidance, scope, sources, evidence, id, record)
     object_get(args, "evidence"); if (GET_PRESENT) { fail("record_adaptation does not accept evidence; use observe_adaptation") ; return }
     evidence = "{\"success\":0,\"failure\":0,\"other\":0,\"observations\":[]}"
     id = optional_string(args, "adaptation_id", ""); if (id == "") id = next_id("adapt")
+    if (!valid_identifier(id, "record_adaptation")) return
     if (id in adapt_json) { fail("adaptation already exists: " id); return }
     record = "{\"id\":" json_escape(id) ",\"kind\":\"adaptation\",\"guidance\":" json_escape(guidance) ",\"scope\":" scope ",\"source_experience_ids\":" sources ",\"evidence\":" evidence ",\"status\":\"active\"}"
     append_record(adapt_file, record); adapt_json[id] = record; adapt_guidance[id] = guidance; adapt_scope[id] = scope; adapt_sources[id] = sources; adapt_evidence[id] = evidence; adapt_status[id] = "active"; adapt_search[id] = tolower(guidance " " scope)
-    tool_text("Recorded scoped adaptation " id ".\n" record)
+    tool_text("Recorded scoped adaptation " id ".\n" adaptation_summary(id))
 }
 
 function revise_adaptation(args, id, guidance, scope, sources, reason, record) {
     if (!required_string(args, "adaptation_id", "revise_adaptation")) return; id = GET_STRING
     if (!(id in adapt_json)) { fail("unknown adaptation: " id); return }
     if (adapt_status[id] == "retired") { fail("cannot revise retired adaptation: " id); return }
-    if (!required_string(args, "guidance", "revise_adaptation")) return; guidance = GET_STRING
+    if (!required_nonempty_string(args, "guidance", "revise_adaptation")) return; guidance = GET_STRING
     scope = required_object(args, "scope", "revise_adaptation"); if (!scope) return
     if (!required_nonempty_string(args, "reason", "revise_adaptation")) return; reason = GET_STRING
     object_get(args, "source_experience_ids"); sources = (GET_PRESENT ? GET_RAW : adapt_sources[id])
     if (substr(sources, 1, 1) != "[") { fail("revise_adaptation source_experience_ids must be an array"); return }
+    if (sources == "[]") { fail("revise_adaptation requires at least one source experience"); return }
     if (!validate_experience_ids(sources, "revise_adaptation source_experience_ids")) return
     record = "{\"id\":" json_escape(id) ",\"kind\":\"adaptation\",\"guidance\":" json_escape(guidance) ",\"scope\":" scope ",\"source_experience_ids\":" sources ",\"evidence\":" adapt_evidence[id] ",\"status\":\"active\"}"
     append_record(adapt_file, record); adapt_json[id] = record; adapt_guidance[id] = guidance; adapt_scope[id] = scope; adapt_sources[id] = sources; adapt_search[id] = tolower(guidance " " scope)
-    tool_text("Revised adaptation " id " (" reason "); prior external evidence was preserved.\n" record)
+    tool_text("Revised adaptation " id " (" bounded_text(reason) "); prior external evidence was preserved.\n" adaptation_summary(id))
 }
 
 function count_evidence(raw, field) { object_get(raw, field); if (GET_PRESENT && GET_RAW ~ /^[0-9]+$/) return GET_RAW + 0; return 0 }
@@ -450,8 +616,9 @@ function append_array(array_raw, item) { if (array_raw == "[]") return "[" item 
 function observe_adaptation(args, id, result, evidence, project, task, observed, old_evidence, success, failure, other, observations, observation, record) {
     if (!required_string(args, "adaptation_id", "observe_adaptation")) return; id = GET_STRING
     if (!(id in adapt_json)) { fail("unknown adaptation: " id); return }
-    if (!required_string(args, "result", "observe_adaptation")) return; result = GET_STRING
+    if (!required_nonempty_string(args, "result", "observe_adaptation")) return; result = GET_STRING
     evidence = required_meaningful_raw(args, "evidence", "observe_adaptation"); if (!evidence) return
+    if (adapt_status[id] == "retired") { fail("cannot observe retired adaptation: " id); return }
     project = optional_string(args, "project", "current"); task = optional_string(args, "task", ""); observed = optional_string(args, "observed_at", "")
     if (!observation_scope_allows(adapt_scope[id], project, task)) return
     old_evidence = adapt_evidence[id]; success = count_evidence(old_evidence, "success"); failure = count_evidence(old_evidence, "failure"); other = count_evidence(old_evidence, "other")
@@ -508,7 +675,7 @@ function find_experiences(args, query, project, limit, id, count, list, truncate
     query = optional_string(args, "query", ""); project = optional_string(args, "project", ""); limit = bounded_limit(args, "limit", MAX_CONTEXT_ITEMS)
     for (id in experience_used) delete experience_used[id]
     list = "["; count = 0
-    while (count < limit && (id = next_experience(experience_used, query, project)) != "") { experience_used[id] = 1; if (count > 0) list = list ","; list = list exp_json[id]; count++ }
+    while (count < limit && (id = next_experience(experience_used, query, project)) != "") { experience_used[id] = 1; if (count > 0) list = list ","; list = list experience_summary(id); count++ }
     truncated = (next_experience(experience_used, query, project) != "")
     tool_text("{\"count\":" count ",\"truncated\":" (truncated ? "true" : "false") ",\"experiences\":" list "]}")
 }
@@ -521,7 +688,7 @@ function recommend_action(args, task, project, scope_raw, id, count, list, limit
     list = "["; count = 0; truncated = 0
     while (count < limit && (id = next_matching_adaptation(recommendation_used, task, project, scope_raw)) != "") { recommendation_used[id] = 1; if (count > 0) list = list ","; list = list adaptation_summary(id); count++ }
     if (next_matching_adaptation(recommendation_used, task, project, scope_raw) != "") truncated = 1
-    tool_text("{\"count\":" count ",\"truncated\":" (truncated ? "true" : "false") ",\"task\":" json_escape(task) ",\"project\":" json_escape(project) ",\"adaptations\":" list "]}")
+    tool_text("{\"count\":" count ",\"truncated\":" (truncated ? "true" : "false") ",\"task\":" bounded_json_string(task) ",\"project\":" bounded_json_string(project) ",\"adaptations\":" list "]}")
 }
 
 function review_adaptation(args, id, e, success, failure, other, recommendation) {

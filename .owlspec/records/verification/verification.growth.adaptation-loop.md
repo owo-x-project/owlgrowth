@@ -8,4 +8,4 @@ target = "test/run.sh"
 
 # Verify the OwlGrowth adaptation loop
 
-Run `./test/run.sh`. The scenario records observed experiences, creates scoped guidance, observes external success, and checks that review recommends strengthening evidence-backed guidance with only a bounded recent-observation projection. It also rejects empty evidence, adaptations without a supporting experience, unknown experience references, and self-seeded adaptation evidence so only observed outcomes change the counts.
+Run `./test/run.sh`. The scenario records observed experiences, creates scoped guidance, observes external success, and checks that review recommends strengthening evidence-backed guidance with bounded recent-observation and field projections. It rejects empty or malformed JSON evidence, adaptations without a supporting experience, unknown experience references, self-seeded adaptation evidence, and new observations for retired adaptations so only valid observed outcomes change the counts.

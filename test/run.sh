@@ -51,6 +51,9 @@ printf '%s\n' "$out" | grep 'refine-or-narrow' >/dev/null
 out=$(call '{"jsonrpc":"2.0","id":14,"method":"tools/call","params":{"name":"retire_adaptation","arguments":{"adaptation_id":"adapt-bad"}}}')
 printf '%s\n' "$out" | grep 'retired' >/dev/null
 
+out=$(call '{"jsonrpc":"2.0","id":141,"method":"tools/call","params":{"name":"observe_adaptation","arguments":{"adaptation_id":"adapt-bad","project":"project-a","task":"dependency debugging","result":"success","evidence":"must not observe retired"}}}')
+printf '%s\n' "$out" | grep 'cannot observe retired' >/dev/null
+
 out=$(call '{"jsonrpc":"2.0","id":15,"method":"resources/read","params":{"uri":"owlgrowth://guidance"}}')
 printf '%s\n' "$out" | grep 'check the lockfile' >/dev/null
 
@@ -108,6 +111,16 @@ printf '%s\n' "$out" | grep 'requires .*evidence' >/dev/null
 
 out=$(call '{"jsonrpc":"2.0","id":47,"method":"tools/call","params":{"name":"record_experience","arguments":{"task":"empty evidence","action":"did something","outcome":"unknown","evidence":""}}}')
 printf '%s\n' "$out" | grep 'non-empty argument' >/dev/null
+
+out=$(call '{"jsonrpc":"2.0","id":471,"method":"tools/call","params":{"name":"record_experience","arguments":{"experience_id":"bad-json","task":"bad json","action":"bad json","outcome":{"broken":},"evidence":"observed"}}}')
+printf '%s\n' "$out" | grep 'valid JSON argument' >/dev/null
+
+long_text=$(awk 'BEGIN { for (i = 1; i <= 6000; i++) printf "x" }')
+out=$(call "{\"jsonrpc\":\"2.0\",\"id\":472,\"method\":\"tools/call\",\"params\":{\"name\":\"record_experience\",\"arguments\":{\"experience_id\":\"bounded-text\",\"task\":\"bounded text\",\"action\":\"$long_text\",\"outcome\":{\"result\":\"$long_text\"},\"evidence\":\"$long_text\"}}}")
+printf '%s\n' "$out" | grep 'outcome_truncated.*true' >/dev/null
+printf '%s\n' "$out" | grep 'evidence_truncated.*true' >/dev/null
+if [ "$(printf '%s\n' "$out" | wc -c)" -gt 3000 ]; then exit 1; fi
+grep 'bounded-text' "$tmp/data/experiences.jsonl" >/dev/null
 
 n=1
 while [ "$n" -le 21 ]; do
