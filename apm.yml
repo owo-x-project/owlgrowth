@@ -1,0 +1,18 @@
+name: owlgrowth
+version: 0.1.0
+description: A small MCP server that turns observed outcomes into scoped action guidance.
+author: owo-x-project
+license: MIT
+targets:
+  - codex
+  - claude
+dependencies:
+  apm: []
+  mcp:
+    - name: owlgrowth
+      registry: false
+      transport: stdio
+      command: ./bin/owlgrowth-mcp
+includes: auto
+scripts:
+  test: ./test/run.sh

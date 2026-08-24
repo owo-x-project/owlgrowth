@@ -1,0 +1,56 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+      - name: Install APM
+        run: python -m pip install --disable-pip-version-check --no-input "apm-cli==0.26.0"
+      - name: Verify release version
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          release_version="${RELEASE_TAG#v}"
+          manifest_version="$(awk '$1 == "version:" { print $2; exit }' apm.yml)"
+          file_version="$(tr -d '[:space:]' < VERSION)"
+          test "$release_version" = "$manifest_version"
+          test "$release_version" = "$file_version"
+      - name: Run tests
+        run: ./test/run.sh
+      - name: Validate APM manifest
+        run: apm pack --dry-run --format apm --archive --archive-format zip --output "$RUNNER_TEMP/owlgrowth-apm" --marketplace none
+      - name: Build source release archive
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          git archive --format=tar.gz --prefix="owlgrowth-${RELEASE_TAG}/" "$RELEASE_TAG" -o "dist/owlgrowth-${RELEASE_TAG}.tar.gz"
+          sha256sum dist/owlgrowth-*.tar.gz > dist/SHA256SUMS
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          gh release create "$RELEASE_TAG" dist/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "$RELEASE_TAG" \
+            --generate-notes

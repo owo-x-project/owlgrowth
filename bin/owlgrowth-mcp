@@ -9,6 +9,14 @@ case "$data_dir" in
 esac
 mkdir -p "$data_dir"
 
+version_file="$script_dir/../VERSION"
+server_version=""
+if [ -r "$version_file" ]; then IFS= read -r server_version < "$version_file" || true; fi
+if [ -z "$server_version" ]; then
+    echo "missing or empty VERSION file: $version_file" >&2
+    exit 1
+fi
+
 lock_file="$data_dir/.owlgrowth.lock"
 lock_token="$data_dir/.owlgrowth.lock.$$"
 lock_acquired=0
@@ -45,7 +53,7 @@ done
 lock_acquired=1
 
 exec 3<&0
-LC_ALL=C awk -v data_dir="$data_dir" -f "$script_dir/../lib/codec.awk" -f "$script_dir/../lib/rpc.awk" -f "$script_dir/../lib/storage.awk" -f "$script_dir/owlgrowth-mcp.awk" <&3 &
+LC_ALL=C awk -v data_dir="$data_dir" -v server_version="$server_version" -f "$script_dir/../lib/codec.awk" -f "$script_dir/../lib/rpc.awk" -f "$script_dir/../lib/storage.awk" -f "$script_dir/owlgrowth-mcp.awk" <&3 &
 awk_pid="$!"
 exec 3<&-
 if wait "$awk_pid"; then status=0; else status="$?"; fi

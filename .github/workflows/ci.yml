@@ -1,0 +1,26 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+      - name: Install APM
+        run: python -m pip install --disable-pip-version-check --no-input "apm-cli==0.26.0"
+      - name: Run tests
+        run: ./test/run.sh
+      - name: Validate APM manifest
+        run: apm pack --dry-run --format apm --archive --archive-format zip --output "$RUNNER_TEMP/owlgrowth-apm" --marketplace none

@@ -21,7 +21,7 @@ function handle_request(line, method, id_present, params) {
     if (method == "notifications/initialized" || method == "notifications/cancelled") return
     if (method == "exit") exit 0
     if (SHUTDOWN_REQUESTED) { if (id_present) rpc_error(-32600, "server is shutting down"); return }
-    if (method == "initialize") { rpc_result("{\"protocolVersion\":\"2024-11-05\",\"capabilities\":{\"tools\":{},\"resources\":{\"subscribe\":false,\"listChanged\":false}},\"serverInfo\":{\"name\":\"owlgrowth\",\"version\":\"0.1.0\"}}"); return }
+    if (method == "initialize") { rpc_result("{\"protocolVersion\":\"2024-11-05\",\"capabilities\":{\"tools\":{},\"resources\":{\"subscribe\":false,\"listChanged\":false}},\"serverInfo\":{\"name\":\"owlgrowth\",\"version\":" json_escape(server_version) "}}"); return }
     if (method == "ping") { rpc_result("{}"); return }
     if (method == "tools/list") { rpc_result(tools_json()); return }
     if (method == "resources/list") { rpc_result(resources_json()); return }
