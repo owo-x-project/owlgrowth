@@ -45,7 +45,7 @@ done
 lock_acquired=1
 
 exec 3<&0
-LC_ALL=C awk -v data_dir="$data_dir" -f "$script_dir/owlgrowth-mcp.awk" <&3 &
+LC_ALL=C awk -v data_dir="$data_dir" -f "$script_dir/../lib/codec.awk" -f "$script_dir/../lib/rpc.awk" -f "$script_dir/../lib/storage.awk" -f "$script_dir/owlgrowth-mcp.awk" <&3 &
 awk_pid="$!"
 exec 3<&-
 if wait "$awk_pid"; then status=0; else status="$?"; fi
