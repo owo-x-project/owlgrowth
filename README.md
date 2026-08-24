@@ -1,5 +1,7 @@
 # OwlGrowth
 
+[日本語版](README.ja.md)
+
 ## Project overview
 
 OwlGrowth is a small, standalone MCP server that turns observed work outcomes into better future actions. It stores project-scoped experiences and reusable action guidance through a stdio MCP interface.
